@@ -93,3 +93,15 @@ recusados. Destinatário vê somente seu crédito; sem IDs, tarifa global ou
 chave de idempotência. Detalhe ASC, extrato DESC; página vazia/final explícita.
 Suíte Linux HTTP: 57 aprovados; inclui corrida bloqueio/débito e comandos de
 estado distintos concorrentes, com reconciliação e primeira tentativa.
+
+### Etapa 7: transporte real concluído
+
+Perfil fault acrescenta proxy PostgreSQL de protocolo (somente teste), sem
+alterar a imagem da API. Interrompe INSERT antes de encaminhar: 503/QIT001014,
+sem saldo/entries; mesma chave depois confirma uma vez. Descarta CommandComplete
+de COMMIT depois de o PostgreSQL confirmar: 503/QIT001027, saldo/entries já
+persistidos; replay na fee0 recupera a operação sem débito duplicado.
+`runner python fault_transport.py` aprovado em containers Linux. Não há
+failpoints na API, mock de banco ou socket Docker montado no runner.
+api/api-fee0 agora apontam explicitamente para a mesma tag/imagem construída;
+o terceiro processo existe somente para o ensaio de transporte.

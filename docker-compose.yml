@@ -15,6 +15,7 @@ x-api-env: &api-env
   PIX_DAY_LIMIT: ${PIX_DAY_LIMIT:-1000000}
   PIX_NIGHT_LIMIT: ${PIX_NIGHT_LIMIT:-100000}
 x-api: &api
+  image: ${BANKING_IMAGE:-qit-banking-api:local}
   build:
     context: .
     target: api
@@ -43,6 +44,27 @@ services:
       FEE_PJ_INTERNAL: '0'
       FEE_PF_PIX_SIMULATED: '0'
       FEE_PJ_PIX_SIMULATED: '0'
+  api-fault:
+    <<: *api
+    profiles: [fault]
+    environment:
+      <<: *api-env
+      DATABASE_URL: postgresql+psycopg2://bootcamp:bootcamp@db-proxy:5432/bootcamp?sslmode=disable&gssencmode=disable
+    depends_on:
+      db-proxy:
+        condition: service_started
+      db:
+        condition: service_healthy
+      bureau:
+        condition: service_started
+  db-proxy:
+    build:
+      context: .
+      target: fault-proxy
+    profiles: [fault]
+    depends_on:
+      db:
+        condition: service_healthy
   db:
     build: ./database
     environment:

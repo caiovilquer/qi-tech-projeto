@@ -31,3 +31,8 @@ COPY tests /tests
 WORKDIR /tests
 ENV PYTHONPATH=/tests
 CMD ["pytest", "-q", "-p", "no:cacheprovider"]
+
+FROM python:3.11-slim AS fault-proxy
+COPY tools/postgres_proxy.py /proxy.py
+USER nobody
+CMD ["python", "/proxy.py"]
