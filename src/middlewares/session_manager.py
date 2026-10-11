@@ -173,6 +173,7 @@ def register_session_manager_middleware(application: FastAPI) -> None:
         # A requisição começa sem sessão nenhuma, e pode terminar assim.
         # Quem cria é o controller, ao pedir a sessão ao contexto.
         context = open_context()
+        request.state.banking_context = context
 
         try:
             response = await call_next(request)

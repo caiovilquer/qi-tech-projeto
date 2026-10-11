@@ -10,7 +10,7 @@ def error_verification():
         class_name = _class[0]
         class_type = _class[1]
         is_custom_exception = False
-        if issubclass(class_type, QIException) and class_name != "QIException":
+        if issubclass(class_type, QIException) and hasattr(class_type, "code") and class_name != "QIException":
             is_custom_exception = True
 
         if is_custom_exception:

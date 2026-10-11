@@ -1,0 +1,1 @@
+[{"httpRequest":{"method":"POST","path":"/check"},"httpResponse":{"statusCode":200,"headers":{"Content-Type":["application/json"]},"body":{"status":"REGULAR","has_debt":false,"reference":"sandbox-only","checked_at":"2026-10-11T12:00:00Z"}},"priority":-10}]

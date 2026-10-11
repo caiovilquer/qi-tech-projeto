@@ -101,7 +101,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from constants import DATABASE_URL
 
 
-engine = create_engine(DATABASE_URL, pool_size=5, pool_recycle=600, pool_pre_ping=True)
+engine = create_engine(
+    DATABASE_URL, pool_size=5, max_overflow=0, pool_timeout=3,
+    pool_recycle=600, pool_pre_ping=True, isolation_level="READ COMMITTED",
+    hide_parameters=True, connect_args={
+        "connect_timeout": 5,
+        "options": "-c lock_timeout=3000 -c statement_timeout=5000 -c idle_in_transaction_session_timeout=15000",
+    },
+)
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False)
 
@@ -142,6 +149,9 @@ class Context:
 
     def __init__(self) -> None:
         self.db_session: Optional[Session] = None
+        self.outcome = "consultado"
+        self.operation_key = None
+        self.error_code = None
 
     def get_or_create_session(self) -> Session:
         if self.db_session is None:

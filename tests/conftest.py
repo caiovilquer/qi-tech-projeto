@@ -1,12 +1,24 @@
-from pathlib import Path
-from os import path, environ
+import os
+import time
+import pytest
+import requests
 
-root = Path(__file__).resolve().parents[1]
+API = os.getenv('API_URL', 'http://localhost:3000')
+TOKEN = os.getenv('INTERNAL_TOKEN', 'sandbox-integrator-only')
+MONITOR = os.getenv('MONITORING_TOKEN', 'sandbox-monitoring-only')
 
-if not environ.get("APP_ENV") or environ.get("APP_ENV") == "local":
-    from dotenv import load_dotenv
 
-    load_dotenv(path.join(str(root), ".env"))
-
-    if environ.get("SERVER_LOCALHOST") is None:
-        environ["SERVER_LOCALHOST"] = "0.0.0.0"
+@pytest.fixture(scope='session', autouse=True)
+def ready():
+    urls = {API, os.getenv('FEE0_URL', API)}
+    deadline = time.monotonic() + 90
+    for url in urls:
+        while time.monotonic() < deadline:
+            try:
+                if requests.get(url+'/readiness', headers={'MONITORING-TOKEN': MONITOR}, timeout=(3, 30)).status_code == 204:
+                    break
+            except requests.RequestException:
+                pass
+            time.sleep(.5)
+        else:
+            pytest.fail('Authenticated readiness did not succeed in 90s')

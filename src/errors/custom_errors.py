@@ -1,101 +1,43 @@
-from errors import QIException
+from errors.base_error import QIException
+
+# One registry is the authority for public banking codes. No raw DB messages.
+CATALOG = {
+    'QIT000004': (403, 'Monitoring credential required'),
+    'QIT000005': (403, 'Customer context required'),
+    'QIT001003': (422, 'Invalid document'),
+    'QIT001004': (409, 'Document already registered'),
+    'QIT001008': (404, 'Customer unavailable'),
+    'QIT001009': (404, 'Account unavailable'),
+    'QIT001010': (422, 'Origin and destination must differ'),
+    'QIT001011': (409, 'Insufficient funds'),
+    'QIT001012': (409, 'Idempotency key conflicts with request'),
+    'QIT001013': (409, 'Balance ceiling exceeded'),
+    'QIT001014': (503, 'Database temporarily unavailable'),
+    'QIT001026': (404, 'Destination unavailable'),
+    'QIT001027': (503, 'Commit result unknown; recover with same key'),
+    'QIT001028': (404, 'Transaction unavailable'),
+    'QIT001029': (409, 'Account state prevents operation'),
+    'QIT001030': (422, 'Account opening declined'),
+    'QIT001031': (503, 'Account opening pending; bureau unavailable'),
+    'QIT001032': (409, 'Pix quota exceeded'),
+    'QIT001033': (400, 'Cursor unavailable'),
+    'QIT001034': (409, 'Account status version conflicts'),
+    'QIT001035': (403, 'Sandbox deposits disabled'),
+}
 
 
-class NotFoundSampleEntity(QIException):
-    code = "QIT001001"
-
-    def __init__(self, sample_entity_key) -> None:
-        title = "Entity not Found"
-        http_status = 404
-        description = f"Entity with key {sample_entity_key} was not found."
-        translation = f"A entidade com chave {sample_entity_key} não foi encontrada."
-        super().__init__(title, self.code, http_status, description, translation)
+class BankingError(QIException):
+    def __init__(self, code, account_key=None):
+        status, message = CATALOG[code]
+        super().__init__('Banking request error', code, status, message, message)
+        if account_key is not None and code in ('QIT001030', 'QIT001031'):
+            self.details = {'account_key': str(account_key)}
 
 
-class SampleEntityFinalStatus(QIException):
-    code = "QIT001002"
-
-    def __init__(self, old_status, new_status) -> None:
-        title = "Entity cannot change status"
-        http_status = 409
-        description = f"Entity with status {old_status} cannot update to {new_status}."
-        translation = "Essa entidade não pode ser atualizada."
-        super().__init__(title, self.code, http_status, description, translation)
-
-
-class InvalidDocumentNumber(QIException):
-    """O CPF tem o formato certo e não existe.
-
-    422, e não 400, de propósito: 400 quer dizer "não consegui ler o seu
-    pedido". Aqui a API leu, entendeu, e o valor é que não pode existir —
-    os dois últimos dígitos não batem com a conta. A diferença está
-    explicada em src/utils/document_number.py.
-    """
-
-    code = "QIT001003"
-
-    def __init__(self, document_number) -> None:
-        title = "Invalid Document Number"
-        http_status = 422
-        description = f"The document number {document_number} is not a valid CPF."
-        translation = "O CPF informado não é válido."
-        super().__init__(title, self.code, http_status, description, translation)
-
-
-class DuplicatedDocumentNumber(QIException):
-    """Já existe um cadastro com este CPF.
-
-    409 Conflict: o pedido está correto em si, e o que impede é o que já
-    está no banco. É a mesma família do SampleEntityFinalStatus aqui em
-    cima — conflito com o que já existe, não erro de quem pediu.
-    """
-
-    code = "QIT001004"
-
-    def __init__(self, document_number) -> None:
-        title = "Document Number already registered"
-        http_status = 409
-        description = f"There is already an entity with the document number {document_number}."
-        translation = "Já existe um cadastro com este CPF."
-        super().__init__(title, self.code, http_status, description, translation)
-
-
-class DuplicatedEmail(QIException):
-    code = "QIT001005"
-
-    def __init__(self, email) -> None:
-        title = "Email already registered"
-        http_status = 409
-        description = f"There is already an entity with the email {email}."
-        translation = "Já existe um cadastro com este e-mail."
-        super().__init__(title, self.code, http_status, description, translation)
-
-
-class UnderageSampleEntity(QIException):
-    code = "QIT001006"
-
-    def __init__(self, age, minimum_age) -> None:
-        title = "Entity is underage"
-        http_status = 422
-        description = f"The entity is {age} years old, and the minimum is {minimum_age}."
-        translation = f"É preciso ter pelo menos {minimum_age} anos."
-        super().__init__(title, self.code, http_status, description, translation)
-
-
-class InvalidBirthdate(QIException):
-    """A data tem o formato certo e não existe no calendário.
-
-    Existe porque o `pattern` do schema sabe contar dígitos, não dias:
-    "2025-02-30" e "9999-99-99" passam pelo regex e morrem no
-    `date.fromisoformat`. Sem esta classe, esse ValueError virava 500 —
-    a API culpando a si mesma por um erro de quem chamou.
-    """
-
-    code = "QIT001007"
-
-    def __init__(self, birthdate) -> None:
-        title = "Invalid Birthdate"
-        http_status = 422
-        description = f"The birthdate {birthdate} is not a real date."
-        translation = "A data de nascimento informada não existe."
-        super().__init__(title, self.code, http_status, description, translation)
+def verify_catalog():
+    from errors.base_error import error_verification
+    error_verification()
+    from errors import InvalidSchema, ForbiddenNotInternal, InvalidParameter, InternalError, MethodNotAllowed, NotFoundResource
+    codes = [c.code for c in (InvalidSchema, ForbiddenNotInternal, InvalidParameter, InternalError, MethodNotAllowed, NotFoundResource)] + list(CATALOG)
+    if len(set(codes)) != len(codes):
+        raise RuntimeError('Duplicate error code')

@@ -29,6 +29,15 @@ def qi_exception_to_response(exception: QIException) -> JSONResponse:
         "translation": exception.translation,
         "code": exception.code,
     }
+    if hasattr(exception, "details"):
+        body["details"] = exception.details
+    from database import get_context
+    try:
+        context = get_context()
+        context.error_code = exception.code
+        context.outcome = "desconhecido" if exception.code == "QIT001027" else "recusado"
+    except Exception:
+        pass
     return JSONResponse(status_code=exception.http_status, content=body)
 
 
@@ -91,11 +100,11 @@ def register_error_handlers(application: FastAPI) -> None:
         # para isso. O QIT000010 que o cliente ve hoje vem de outro
         # lugar: do controller, quando birthdate_from > birthdate_to.
         if origin in ("query", "path"):
-            return qi_exception_to_response(InvalidParameter(description))
+            return qi_exception_to_response(InvalidSchema("Invalid request format"))
 
-        return qi_exception_to_response(InvalidSchema(description))
+        return qi_exception_to_response(InvalidSchema("Invalid request format"))
 
     @application.exception_handler(Exception)
     def handle_unexpected_error(request: Request, exception: Exception) -> JSONResponse:
-        logger.exception(f"Erro inesperado em {request.method} {request.url.path}")
+        logger.error("Unexpected failure (%s)", type(exception).__name__)
         return qi_exception_to_response(InternalError())
