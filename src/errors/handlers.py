@@ -35,10 +35,21 @@ def qi_exception_to_response(exception: QIException) -> JSONResponse:
     try:
         context = get_context()
         context.error_code = exception.code
-        context.outcome = "desconhecido" if exception.code == "QIT001027" else "recusado"
+        context.outcome = "desconhecido" if exception.code in ("QIT001027", "QIT000500") else "recusado"
     except Exception:
         pass
     return JSONResponse(status_code=exception.http_status, content=body)
+
+
+def unexpected_error_to_response(request: Request, exception: Exception) -> JSONResponse:
+    # Keep the response and structured request log inside the request-id layer.
+    # A 500 does not prove rollback, so retain uncertainty for key recovery.
+    context = getattr(request.state, "banking_context", None)
+    if context is not None:
+        context.error_code = "QIT000500"
+        context.outcome = "desconhecido"
+    logger.error("Unexpected failure (%s)", type(exception).__name__)
+    return qi_exception_to_response(InternalError())
 
 
 def describe_validation_error(error: dict) -> str:
@@ -64,6 +75,11 @@ def register_error_handlers(application: FastAPI) -> None:
 
     @application.exception_handler(StarletteHTTPException)
     def handle_http_exception(request: Request, exception: StarletteHTTPException) -> JSONResponse:
+        if exception.status_code == 400:
+            # FastAPI reports undecodable request bodies as HTTPException(400).
+            # This is a client format error, including invalid UTF-8 JSON.
+            return qi_exception_to_response(InvalidSchema("Invalid request format"))
+
         if exception.status_code == 404:
             return qi_exception_to_response(NotFoundResource())
 
@@ -106,5 +122,4 @@ def register_error_handlers(application: FastAPI) -> None:
 
     @application.exception_handler(Exception)
     def handle_unexpected_error(request: Request, exception: Exception) -> JSONResponse:
-        logger.error("Unexpected failure (%s)", type(exception).__name__)
-        return qi_exception_to_response(InternalError())
+        return unexpected_error_to_response(request, exception)

@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from constants import BYPASS_ENDPOINTS
 from utils.logger import get_logger
 from utils.request_context import get_request_id
+from errors.handlers import unexpected_error_to_response
 
 logger = get_logger(__name__)
 
@@ -12,7 +13,10 @@ def register_request_logger_middleware(application: FastAPI) -> None:
     @application.middleware('http')
     async def log_request(request: Request, call_next):
         started = time.perf_counter()
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exception:
+            response = unexpected_error_to_response(request, exception)
         if request.url.path not in BYPASS_ENDPOINTS:
             context = getattr(request.state, 'banking_context', None)
             logger.info(json.dumps({

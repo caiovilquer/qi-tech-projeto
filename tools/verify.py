@@ -59,7 +59,17 @@ try:
     command(['run','--rm','--no-deps','runner'])
     if args.suite_only: raise SystemExit(0)
     command(['up','-d','--wait','api-fault'])
-    command(['run','--rm','--no-deps','runner','python','fault_transport.py'])
+    command(['run','--rm','--no-deps','runner','pytest','-q','fault_transport.py','-p','no:cacheprovider'])
+    # Real packaging fault in the disposable test API. No source-tree edit or
+    # public failpoint: its first customer request has no cached JSON schema.
+    command(['exec','-T','api-fault','python','-c',
+             'from pathlib import Path; Path("/app/schemas/post_customer.json").rename("/app/schemas/post_customer.json.test-backup")'])
+    try:
+        command(['run','--rm','--no-deps','runner','pytest','-q',
+                 'operational_errors.py::test_unexpected_failure_returns_safe_500_with_request_id','-p','no:cacheprovider'])
+    finally:
+        command(['exec','-T','api-fault','python','-c',
+                 'from pathlib import Path; Path("/app/schemas/post_customer.json.test-backup").rename("/app/schemas/post_customer.json")'])
     initial_logs=command(['logs','--no-color','api','api-fee0','api-fault'],capture=True)
     # Third API is unnecessary in calendar/restart scenarios.
     command(['stop','api-fault','db-proxy'])
@@ -74,7 +84,8 @@ try:
     command(['restart','db','api','api-fee0'])
     scenario('persist')
     command(['stop','db'])
-    scenario('database_down')
+    command(['run','--rm','--no-deps','-e','SCENARIO_STATE='+json.dumps(state),'runner','pytest','-q',
+             'operational_errors.py::test_database_outage_returns_safe_503','-p','no:cacheprovider'])
     command(['start','db'])
     scenario('persist')
     command(['stop','bureau'])
@@ -86,7 +97,8 @@ try:
     scenario('bureau_recovered')
     env['SANDBOX_DEPOSITS']='false'
     command(['up','-d','--wait','api','api-fee0'])
-    scenario('sandbox_off')
+    command(['run','--rm','--no-deps','-e','SCENARIO_STATE='+json.dumps(state),'runner','pytest','-q',
+             'operational_errors.py::test_disabled_sandbox_returns_403_without_financial_effects','-p','no:cacheprovider'])
     command(['run','--rm','--no-deps','-e','APP_ENV=sandbox','-e','TEST_CLOCK=2026-10-11T12:00:00Z','api'],expected_failure=True)
     # Scan only application logs, never raw SQL, passwords or bodies.
     logs=initial_logs+command(['logs','--no-color','api','api-fee0','api-fault'],capture=True)
