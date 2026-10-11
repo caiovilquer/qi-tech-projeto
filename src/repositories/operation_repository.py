@@ -2,7 +2,7 @@ from uuid import uuid4
 from sqlalchemy import select, update, func
 from sqlalchemy.dialects.postgresql import insert
 import constants
-from models import operation, account, account_entry
+from models import operation, account, account_entry, customer
 
 
 class OperationRepository:
@@ -50,3 +50,13 @@ class OperationRepository:
             conditions.append(account_entry.c.id<marker)
         return self.session.execute(select(account_entry,operation.c.operation_key).join(operation,operation.c.id==account_entry.c.operation_id)
                                    .where(*conditions).order_by(account_entry.c.id.desc()).limit(limit+1)).mappings().all()
+
+    def lock_customer(self, customer_id):
+        self.session.execute(select(customer.c.id).where(customer.c.id==customer_id).with_for_update(key_share=True)).one()
+
+    def pix_consumed(self, customer_id, start, end):
+        return self.session.execute(select(func.coalesce(func.sum(-account_entry.c.delta_cents),0))
+            .select_from(account_entry.join(operation,operation.c.id==account_entry.c.operation_id))
+            .where(operation.c.customer_id==customer_id,operation.c.modality=='PIX_SIMULATED',
+                   account_entry.c.role=='TRANSFER_DEBIT',operation.c.created_at>=start,
+                   operation.c.created_at<end)).scalar_one()

@@ -71,3 +71,15 @@ Suíte Linux HTTP: 38 aprovados em 7,44s. Gasto duplo, A↔B e mesma chave entre
 instâncias avaliam a primeira tentativa, sem retries. Recusas não alteram
 histórico/saldos; chave recusada é reutilizável após aporte. Teto 2^53−1 e
 inteiros estritos validados. Saldo e balance_after reconstruídos pela API.
+
+### Etapa 5 concluída
+
+Pix coordena primeiro o cliente com NO KEY UPDATE, depois contas por ID.
+Quota soma somente TRANSFER_DEBIT de PIX_SIMULATED confirmado na janela
+America/Sao_Paulo, após locks e com o mesmo instante usado nas entries.
+Sem contador/cache; principal, tarifa e recebimentos tratados separadamente.
+Suíte Linux HTTP: 42 aprovados. Quota compartilhada entre contas concorrentes,
+Pix entre contas próprias, limite exato, tarifas PF/PJ e replay preservados.
+APIs iniciadas em APP_ENV=test, TEST_CLOCK=2026-10-11T12:00:00Z; runner --no-deps
+para preservar essa configuração durante os testes (Compose run sem isso pode
+recriar dependências com ambiente diferente).

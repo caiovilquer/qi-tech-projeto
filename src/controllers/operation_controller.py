@@ -4,6 +4,7 @@ from repositories.operation_repository import OperationRepository
 from errors import BankingError, InvalidParameter
 from utils.validation import uuid_value, instant
 from dtos.banking_dto import utc
+from utils.pix_window import pix_window
 import constants
 
 
@@ -35,6 +36,8 @@ class OperationController(AccountController):
             self.session.rollback()
             return {'operation_key':existing['operation_key']}
         self.context.operation_key=operation['operation_key']
+        if modality=='PIX_SIMULATED':
+            repo.lock_customer(owner['id'])
         rows={r['id']:r for r in self.repository.lock([destination['id']]+([origin['id']] if origin else []))}
         destination=rows[destination['id']]
         origin=rows[origin['id']] if origin else None
@@ -49,6 +52,10 @@ class OperationController(AccountController):
             raise BankingError('QIT001011')
         if destination['balance_cents']+amount>constants.MAX_CENTS:
             raise BankingError('QIT001013')
+        if modality=='PIX_SIMULATED':
+            start,end,quota=pix_window(timestamp)
+            if repo.pix_consumed(owner['id'],start,end)+amount>quota:
+                raise BankingError('QIT001032')
         if origin:
             after=repo.delta(operation['id'],origin['id'],-amount,'TRANSFER_DEBIT',timestamp)
             assert after==origin['balance_cents']-amount

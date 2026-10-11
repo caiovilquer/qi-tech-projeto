@@ -1,1 +1,1 @@
-{"type":"object","additionalProperties":false,"required":["amount_cents","destination_account_key","modality"],"properties":{"amount_cents":{"type":"integer","minimum":1,"maximum":9007199254740991},"destination_account_key":{"type":"string"},"modality":{"enum":["INTERNAL"]}}}
+{"type":"object","additionalProperties":false,"required":["amount_cents","destination_account_key","modality"],"properties":{"amount_cents":{"type":"integer","minimum":1,"maximum":9007199254740991},"destination_account_key":{"type":"string"},"modality":{"enum":["INTERNAL","PIX_SIMULATED"]}}}
