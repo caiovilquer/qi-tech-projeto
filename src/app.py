@@ -7,6 +7,7 @@ from middlewares import (register_session_manager_middleware, register_internal_
 from resources import HealthCheckResource
 from resources.customers import CustomerResource
 from resources.accounts import AccountResource
+from resources.operations import OperationResource
 from utils.logger import setup_logging
 
 
@@ -28,6 +29,11 @@ def create_app():
     application.add_api_route('/accounts', accounts.on_get_list, methods=['GET'])
     application.add_api_route('/accounts/{account_key}', accounts.on_get, methods=['GET'])
     application.add_api_route('/accounts/{account_key}/status', accounts.on_put_status, methods=['PUT'])
+    operations = OperationResource()
+    application.add_api_route('/accounts/{account_key}/deposits', operations.on_post_deposit, methods=['POST'])
+    application.add_api_route('/accounts/{account_key}/transfers', operations.on_post_transfer, methods=['POST'])
+    application.add_api_route('/accounts/{account_key}/statement', operations.on_get_statement, methods=['GET'])
+    application.add_api_route('/accounts/{account_key}/transactions/{operation_key}', operations.on_get_detail, methods=['GET'])
     register_error_handlers(application)
     return application
 

@@ -1,0 +1,1 @@
+{"type":"object","additionalProperties":false,"required":["amount_cents"],"properties":{"amount_cents":{"type":"integer","minimum":1,"maximum":9007199254740991}}}

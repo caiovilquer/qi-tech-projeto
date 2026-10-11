@@ -73,3 +73,40 @@ def account(c, key=None, url=API):
 
 def balance(c,a):
     return ok(call('GET','/accounts/'+a,c))['balance_cents']
+
+
+def deposit(c,a,amount,key=None,url=API):
+    return call('POST','/accounts/'+a+'/deposits',c,{'amount_cents':amount},key or uid(),url=url)
+
+
+def transfer(c,a,b,amount,key=None,modality='INTERNAL',url=API):
+    return call('POST','/accounts/'+a+'/transfers',c,{'destination_account_key':b,'amount_cents':amount,'modality':modality},key or uid(),url=url)
+
+
+def statement(c,a,**params):
+    return ok(call('GET','/accounts/'+a+'/statement',c,params=params))
+
+
+def detail(c,a,op):
+    return ok(call('GET','/accounts/'+a+'/transactions/'+op,c))
+
+
+def history(c,a):
+    entries=[]; cursor=None
+    while True:
+        page=statement(c,a,**({'cursor':cursor} if cursor else {}),limit=100)
+        entries+=page['data']
+        if page['is_last_page']: break
+        cursor=page['next_cursor']
+    assert len({e['entry_key'] for e in entries})==len(entries)
+    return entries
+
+
+def reconcile(c,a):
+    entries=list(reversed(history(c,a)))
+    running=0
+    for e in entries:
+        running+=e['delta_cents']
+        assert running==e['balance_after_cents']
+    assert running==balance(c,a)
+    return entries

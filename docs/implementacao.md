@@ -58,3 +58,16 @@ contra reenvio antigo. Listagem e autorização por conta implantadas.
 Suíte Linux HTTP: 21 aprovados em 7,13s; bureau REGULAR/IRREGULAR/NOT_FOUND,
 dívida informativa, erro/timeout/malformado, retomada, resposta tardia,
 concorrência de abertura, versões e privacidade.
+
+### Etapa 4 concluída
+
+Aportes e INTERNAL usam reserva imediata, SELECT separado para replay,
+NO KEY UPDATE por ID crescente, projeções frescas e UPDATE relativo/RETURNING.
+Principal precede tarifa; zero fee não cria entry. Saldo, operação e entries
+comitam juntos. Consultas financeiras foram antecipadas para verificar os
+efeitos e reconciliar cada lançamento já nesta fatia; sua matriz será ampliada
+na etapa 6. Replay preserva tarifa mesmo na fee0 e depois de bloqueio.
+Suíte Linux HTTP: 38 aprovados em 7,44s. Gasto duplo, A↔B e mesma chave entre
+instâncias avaliam a primeira tentativa, sem retries. Recusas não alteram
+histórico/saldos; chave recusada é reutilizável após aporte. Teto 2^53−1 e
+inteiros estritos validados. Saldo e balance_after reconstruídos pela API.
