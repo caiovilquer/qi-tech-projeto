@@ -172,6 +172,12 @@ docker compose --profile test run --rm --no-deps runner
 
 `--no-deps` preserva a configuração das APIs iniciadas no passo anterior.
 Também é possível `python3 tools/verify.py --suite-only --project qit-tests`.
+Os erros públicos têm cenários HTTP explícitos em pytest, conforme a
+[matriz de testes de erros](docs/erros-testes.md). As regressões de infraestrutura
+da base incluem 403, 404, 405 e acentos, junto das sondas atuais. Falhas de banco,
+confirmação de COMMIT e erro inesperado são executadas em etapas do roteiro
+completo, porque o host precisa preparar cada falha real antes do pytest.
+
 Não há testes ignorados ou placeholders. A suíte prepara clientes/contas/saldo
 pelas rotas, sem importar src ou fazer SQL de negócio. PostgreSQL e HTTP são
 reais; MockServer substitui somente o bureau. Concorrência julga a primeira

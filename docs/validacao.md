@@ -1,6 +1,28 @@
 # Evidências de validação · 11/10/2026
 
-## Executado no ambiente local
+## Ampliação de regressões e erros públicos
+
+Código/testes do commit `d09385c`: **77 testes pytest aprovados**, sendo 72 na
+suíte principal e 5 nas etapas de transporte/erro operacional. Os 27 códigos
+públicos possuem cenários explícitos na [matriz de erros](erros-testes.md).
+Registros anteriores de 64 testes abaixo descrevem a validação inicial.
+
+```bash
+python3 tools/verify.py --project qit-error-regression --port 3304
+```
+
+Resultado: 72 pytest em 10,10s; 2 de transporte em 2,34s; erro inesperado,
+banco parado e sandbox desabilitado em execuções pytest específicas. Calendário,
+replay, reinícios, indisponibilidade e logs também aprovados. Total 84,6s.
+Dois defeitos foram observados em testes antes das correções: correlação ausente
+na resposta 500 e UTF-8 inválido classificado como erro interno.
+
+Clone limpo do commit d09385c, volume novo qit-errors-clean_bank-data:
+72 pytest em 10,10s e 5 pytest operacionais/de transporte aprovados; todos os
+ensaios também aprovados. Roteiro completo 87,6s. Logs locais em
+`.git/error-clean-verification.log`.
+
+## Validação inicial no ambiente local
 
 Docker Engine 29.8.2 em macOS; aplicação, PostgreSQL 16.15, MockServer 5.15.0 e
 pytest executados em containers Linux aarch64. Python 3.11, dependências diretas

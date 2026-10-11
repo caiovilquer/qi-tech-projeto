@@ -141,5 +141,24 @@ em sandbox com relógio normal; GET / respondeu 200 e readiness autenticada 204.
 
 Primeiro commit preservado: 493b956c152589d2cea4d6c0023f5133c787e019.
 Commits usam a identidade Git previamente configurada, sem trailers de agentes.
-O commit posterior desta evidência altera somente documentação; o código/testes
-permanecem os do commit a4ce6e9 executado no clone limpo.
+A validação inicial usou o commit a4ce6e9 no clone limpo. As regressões e
+correções posteriores estão registradas abaixo.
+
+
+### Regressões de infraestrutura e erros públicos
+
+Mantido o escopo bancário. Foram incorporadas as garantias de infraestrutura
+da base e conferido que os 27 códigos de erro possuem cenários pytest explícitos.
+Falhas de transporte, banco parado e sandbox desabilitado também rodam em pytest,
+em etapas controladas pelo host. Matriz em [erros-testes.md](erros-testes.md).
+
+Dois testes novos falharam antes da correção: 500 perdia X-Request-ID; corpo
+JSON com UTF-8 inválido virava 500. Commit d09385c corrige a correlação e o
+mapeamento de formato inválido para 400/QIT000001. Nenhum endpoint legado foi
+ativado, e não houve alteração de schema, tarifa, saldo ou regra financeira.
+
+Roteiro executado em qit-error-regression: 72 pytest principais em 10,10s,
+mais 5 pytest de falhas em etapas específicas; total 77 aprovados, além dos
+ensaios de calendário/reinício/recuperação. Roteiro completo: 84,6s.
+Clone limpo d09385c e volume novo: os mesmos 77 pytest e ensaios aprovados,
+em 87,6s. Toda a documentação técnica foi preservada nas fontes originais.
