@@ -119,4 +119,27 @@ conferências de saldo que dependiam de assert/PYTHONOPTIMIZE e semântica NULL
 no CHECK de evidência cadastral. Model/schema conferidos pela imagem testada.
 PostgreSQL omite statements/details sensíveis em logs de erro.
 README atualizado e workflow Ubuntu preparado (não executado remotamente).
-Próximo passo final: clone limpo/volume novo e auditoria do histórico/staging.
+Clone limpo do commit a4ce6e9 e volume novo qit-clean-validation_bank-data:
+64 pytest em 9,65s e todos os ensaios aprovados; roteiro completo 79,7s.
+As sete etapas e a auditoria final estão concluídas; nenhum cenário especificado
+ficou ignorado ou como placeholder. Os ambientes temporários foram parados sem
+apagar os volumes. O Compose padrão qit-banking está ativo em localhost:3000,
+em sandbox com relógio normal; GET / respondeu 200 e readiness autenticada 204.
+
+## Histórico de implementação
+
+| Commit | Fatia |
+| --- | --- |
+| 11495cb | Schema, configuração, infraestrutura e sondas |
+| 68a1b08 | Clientes PF/PJ, identidade e idempotência cadastral |
+| f107fb6 | Bureau, abertura retomável e estados versionados |
+| 2f6a338 | Escrita financeira atômica e lançamentos |
+| 876ae6a | Quota Pix compartilhada e coordenação |
+| 5f60055 | Consultas privadas, cursor e filtros |
+| 1206f6c | Falhas reais de transporte/commit |
+| a4ce6e9 | Matriz integrada, recuperação, calendário, CI e uso |
+
+Primeiro commit preservado: 493b956c152589d2cea4d6c0023f5133c787e019.
+Commits usam a identidade Git previamente configurada, sem trailers de agentes.
+O commit posterior desta evidência altera somente documentação; o código/testes
+permanecem os do commit a4ce6e9 executado no clone limpo.

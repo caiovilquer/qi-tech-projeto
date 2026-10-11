@@ -56,8 +56,12 @@ O terceiro processo/proxy é exclusivo do ensaio e fica parado depois dele.
   e publicação) comparados por SHA-256: nenhum mudou.
 - O commit inicial contém exatamente os 67 arquivos do ZIP, respeitando apenas
   a normalização LF já prevista na base; não foi reescrito.
-- Instalação em clone limpo e volume novo: validação final em andamento; o
-  resultado será registrado antes da entrega.
+- Clone local limpo do commit `a4ce6e9`, em `.git/clean-checkout`, e volume novo
+  `qit-clean-validation_bank-data`: **64 pytest aprovados em 9,65s** e todos os
+  ensaios completos, em **79,7s**. Executado com
+  `python3 .git/clean-checkout/tools/verify.py --project qit-clean-validation --port 3301`.
+  API, PostgreSQL, MockServer e runner em containers Linux; arquivos somente do Git.
+  Logs locais em `.git/clean-verification.log`.
 - Workflow Ubuntu/GitHub Actions preparado, com limite de 15 minutos; não foi
   executado remotamente. Os resultados acima são locais, em containers Linux.
 - Não houve deploy, push, repositório remoto ou avaliação externa. G-09/G-10/G-11
@@ -66,3 +70,9 @@ O terceiro processo/proxy é exclusivo do ensaio e fica parado depois dele.
 O harness restaura as duas APIs ao instante de teste padrão e sandbox habilitado,
 preservando o volume. Logs detalhados locais ficaram em `.git/verification-final.log`
 (fora da árvore versionada); esta síntese e o roteiro permitem reproduzir a prova.
+
+O Compose padrão `qit-banking` foi iniciado em sandbox com relógio normal e
+volume próprio novo, em localhost:3000; raiz HTTP 200 e readiness autenticada
+HTTP 204. Ambientes temporários qit-implementation e qit-clean-validation foram
+parados sem apagar seus volumes de dados fictícios. Git principal sem remote,
+sem alterações pendentes, e hash inicial/RFC/fontes protegidas auditados.
