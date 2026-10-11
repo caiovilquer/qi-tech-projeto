@@ -10,6 +10,12 @@ A [RFC v8 aprovada](docs/RFC-v8.md) é a especificação. Seus diagramas estão 
 etapas, decisões e evidências. O site e as aulas originais não fazem parte deste
 repositório e não são necessários para executar a API.
 
+## Equipe
+
+- Caio Cidade Rodrigues
+- Caio Vilquer Carvalho
+- Matheus Victor Barbosa dos Santos
+
 ## Subir o sandbox
 
 Requisitos: Docker com Compose v2 e Git. Python 3 no host somente para o roteiro
