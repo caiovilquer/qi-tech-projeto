@@ -5,10 +5,10 @@ simulado, aportes, transferências INTERNAL e PIX_SIMULATED, estados versionados
 e extrato por lançamento. BRL em centavos inteiros. Python 3.11, FastAPI,
 SQLAlchemy 2.0, psycopg2 e PostgreSQL 16, preservando as versões diretas da base.
 
-A [RFC v8 aprovada](docs/RFC-v8.md) é a especificação. Seus diagramas estão em
-`docs/assets/`. O [registro de implementação](docs/implementacao.md) explica as
-etapas, decisões e evidências. O site e as aulas originais não fazem parte deste
-repositório e não são necessários para executar a API.
+A especificação está disponível em [PDF](docs/RFC-v8.pdf) e
+[Markdown editável](docs/RFC-v8.md), com os diagramas em `docs/assets/`.
+A [implementação](docs/implementacao.md) descreve a organização do código,
+os protocolos de escrita e a execução dos testes.
 
 ## Equipe
 
@@ -258,5 +258,4 @@ Alterações futuras de schema com dados precisam de migração versionada.
 
 O histórico inicia no commit `493b956c152589d2cea4d6c0023f5133c787e019`, com os 67
 arquivos originais do ZIP da Aula 1 conferidos antes de qualquer mudança.
-A licença MIT original foi preservada. Não há publicação da API ou repositório
-remoto criado por este trabalho.
+A licença MIT original foi preservada.

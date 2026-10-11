@@ -47,10 +47,10 @@ de regras, sessões ou banco. O MockServer representa somente o bureau externo.
 - O teste de corpo JSON com UTF-8 inválido recebeu 500. A exceção HTTP 400 do
   parser agora vira `400/QIT000001`, sem expor bytes ou detalhes internos.
 
-Os registros dessas falhas reais e dos testes verdes ficam em `.git/500-red.log`,
-`.git/input-errors-red.log` e `.git/error-regression-final.log`. A instrumentação
-altera somente o container descartável `api-fault`, restaura o arquivo em finally
-e não cria endpoint/cabeçalho de falha na API. O runner não recebe Docker socket.
+Esses cenários são reproduzidos pelo roteiro `tools/verify.py`. A instrumentação
+altera somente o container descartável `api-fault` e restaura o arquivo ao final.
+O controle das falhas fica no host, sem endpoint de instrumentação na API e sem
+Docker socket no runner.
 
 ## Garantias de infraestrutura da base
 

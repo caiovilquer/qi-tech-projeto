@@ -1,164 +1,93 @@
-# Implementação da RFC v8
+# Implementação bancária
 
-Base original: `493b956c152589d2cea4d6c0023f5133c787e019`. 67 arquivos
-comparados byte a byte ao ZIP antes do commit; árvore Git conferida também
-com a normalização LF prevista em `.gitattributes`. Nenhuma edição prévia.
-Git inicializado somente nesta API. Fontes externas são somente leitura.
+O serviço implementa a [RFC v8](RFC-v8.md) em um monólito Python/FastAPI,
+com PostgreSQL 16 e cinco entidades: customer, account, operation, account_entry
+e account_status_event. Os contratos JSON são estritos; valores monetários usam
+centavos inteiros de BRL, com teto de 2^53−1.
 
-## Etapas
+## Organização do código
 
-1. Schema de cinco entidades, configuração, Compose, sondas e instalação limpa.
-2. PF/PJ, identidade delegada e criação idempotente.
-3. Abertura persistida, bureau, retomada e estados versionados.
-4. Aporte e transferência, tarifa, entries, reserva e commit único.
-5. Pix simulado, quota por cliente e concorrência.
-6. Consultas, cursor, filtros e detalhe por conta.
-7. Matriz integrada, falhas reais de transporte, reinício, relógio de teste,
-   reconciliação e documentação reproduzível.
-
-Cada etapa termina com testes HTTP/PostgreSQL e commit próprio. Repositories
-não comitam. Controllers controlam transações; a sessão da base é encerrada
-antes do bureau. Entradas JSON Schema estritas; consultas usam projeções
-frescas; NO KEY UPDATE mantém compatibilidade com KEY SHARE das FKs.
-
-A especificação copiada em [RFC-v8.md](RFC-v8.md) e seus diagramas preservam
-os caminhos relativos.
-
-## Evidências e decisões locais
-
-- Docker disponível: engine 29.8.2. Testes rodam em containers Linux isolados.
-- Base preservada no primeiro commit, inclusive dois avisos preexistentes de
-  linha vazia no fim do Dockerfile e Compose.
-- Estado das etapas e resultados serão registrados conforme execução.
-
-### Etapa 1 concluída
-
-Build Linux com todas as versões diretas originais instalado. Schema de cinco
-entidades criado em volume novo; readiness verifica suas colunas sem escrita.
-`docker compose -p qit-implementation --profile test run --rm runner`: 1 teste
-HTTP aprovado, incluindo sondas e separação das credenciais. Removidos os
-módulos/testes didáticos de SampleEntity após preservação no commit inicial.
-
-### Etapa 2 concluída
-
-Cadastro PF/PJ com normalização e validação CPF/CNPJ, incluindo vetor oficial
-alfanumérico `12.ABC.345/01DE-35` do manual da Receita Federal. JSON Schema
-recusa campos extras; validador de inteiros foi especializado para recusar
-floats integrais. Contexto delegado e DTO sem IDs/chaves internas. INSERT
-ON CONFLICT e SELECT separado arbitram criação entre processos.
-Suíte Linux HTTP: 10 aprovados, sem SQL de teste/importação de src.
-
-### Etapa 3 concluída
-
-Abertura cria PENDING/evento inicial antes do connector; fecha Session e libera
-a conexão antes de HTTP. Nova sessão relê a conta com NO KEY UPDATE. Conclusão
-única conserva evidência mínima; GET não conclui. Replay consulta o evento de
-abertura, mesmo após bloqueio. Comando de estado com versão, no-op e proteção
-contra reenvio antigo. Listagem e autorização por conta implantadas.
-Suíte Linux HTTP: 21 aprovados em 7,13s; bureau REGULAR/IRREGULAR/NOT_FOUND,
-dívida informativa, erro/timeout/malformado, retomada, resposta tardia,
-concorrência de abertura, versões e privacidade.
-
-### Etapa 4 concluída
-
-Aportes e INTERNAL usam reserva imediata, SELECT separado para replay,
-NO KEY UPDATE por ID crescente, projeções frescas e UPDATE relativo/RETURNING.
-Principal precede tarifa; zero fee não cria entry. Saldo, operação e entries
-comitam juntos. Consultas financeiras foram antecipadas para verificar os
-efeitos e reconciliar cada lançamento já nesta fatia; sua matriz será ampliada
-na etapa 6. Replay preserva tarifa mesmo na fee0 e depois de bloqueio.
-Suíte Linux HTTP: 38 aprovados em 7,44s. Gasto duplo, A↔B e mesma chave entre
-instâncias avaliam a primeira tentativa, sem retries. Recusas não alteram
-histórico/saldos; chave recusada é reutilizável após aporte. Teto 2^53−1 e
-inteiros estritos validados. Saldo e balance_after reconstruídos pela API.
-
-### Etapa 5 concluída
-
-Pix coordena primeiro o cliente com NO KEY UPDATE, depois contas por ID.
-Quota soma somente TRANSFER_DEBIT de PIX_SIMULATED confirmado na janela
-America/Sao_Paulo, após locks e com o mesmo instante usado nas entries.
-Sem contador/cache; principal, tarifa e recebimentos tratados separadamente.
-Suíte Linux HTTP: 42 aprovados. Quota compartilhada entre contas concorrentes,
-Pix entre contas próprias, limite exato, tarifas PF/PJ e replay preservados.
-APIs iniciadas em APP_ENV=test, TEST_CLOCK=2026-10-11T12:00:00Z; runner --no-deps
-para preservar essa configuração durante os testes (Compose run sem isso pode
-recriar dependências com ambiente diferente).
-
-### Etapa 6 concluída
-
-DTOs filtram detalhe por conta e extrato por lançamento. Cursor resolve apenas
-na conta/intervalo autorizados; entradas novas não deslocam páginas antigas.
-Datas RFC3339 com offset válido, [from,to), parâmetros desconhecidos/repetidos
-recusados. Destinatário vê somente seu crédito; sem IDs, tarifa global ou
-chave de idempotência. Detalhe ASC, extrato DESC; página vazia/final explícita.
-Suíte Linux HTTP: 57 aprovados; inclui corrida bloqueio/débito e comandos de
-estado distintos concorrentes, com reconciliação e primeira tentativa.
-
-### Etapa 7: transporte real concluído
-
-Perfil fault acrescenta proxy PostgreSQL de protocolo (somente teste), sem
-alterar a imagem da API. Interrompe INSERT antes de encaminhar: 503/QIT001014,
-sem saldo/entries; mesma chave depois confirma uma vez. Descarta CommandComplete
-de COMMIT depois de o PostgreSQL confirmar: 503/QIT001027, saldo/entries já
-persistidos; replay na fee0 recupera a operação sem débito duplicado.
-`runner python fault_transport.py` aprovado em containers Linux. Não há
-failpoints na API, mock de banco ou socket Docker montado no runner.
-api/api-fee0 agora apontam explicitamente para a mesma tag/imagem construída;
-o terceiro processo existe somente para o ensaio de transporte.
-
-### Etapa 7: matriz e operação concluídas no checkout
-
-Roteiro `tools/verify.py` executado: 64 pytest HTTP aprovados e ensaios de
-calendário, disputa noturna de quota, >24h, tarifa alterada, abertura pendente
-retomada, reinícios reais, banco/bureau parados, sandbox desabilitado e recusa
-de relógio de teste no modo normal. Total 81,6s. Resultados em `validacao.md`.
-O verificador coleta logs antes de recriar containers, pois logs de um container
-removido não podem ser avaliados pela última consulta Compose.
-Revisão corrigiu credenciais não ASCII que poderiam levantar TypeError,
-conferências de saldo que dependiam de assert/PYTHONOPTIMIZE e semântica NULL
-no CHECK de evidência cadastral. Model/schema conferidos pela imagem testada.
-PostgreSQL omite statements/details sensíveis em logs de erro.
-README atualizado e workflow Ubuntu preparado (não executado remotamente).
-Clone limpo do commit a4ce6e9 e volume novo qit-clean-validation_bank-data:
-64 pytest em 9,65s e todos os ensaios aprovados; roteiro completo 79,7s.
-As sete etapas e a auditoria final estão concluídas; nenhum cenário especificado
-ficou ignorado ou como placeholder. Os ambientes temporários foram parados sem
-apagar os volumes. O Compose padrão qit-banking está ativo em localhost:3000,
-em sandbox com relógio normal; GET / respondeu 200 e readiness autenticada 204.
-
-## Histórico de implementação
-
-| Commit | Fatia |
+| Camada | Responsabilidade |
 | --- | --- |
-| 11495cb | Schema, configuração, infraestrutura e sondas |
-| 68a1b08 | Clientes PF/PJ, identidade e idempotência cadastral |
-| f107fb6 | Bureau, abertura retomável e estados versionados |
-| 2f6a338 | Escrita financeira atômica e lançamentos |
-| 876ae6a | Quota Pix compartilhada e coordenação |
-| 5f60055 | Consultas privadas, cursor e filtros |
-| 1206f6c | Falhas reais de transporte/commit |
-| a4ce6e9 | Matriz integrada, recuperação, calendário, CI e uso |
+| resources/schemas | Adaptar HTTP e validar corpo, UUIDs, cabeçalhos e filtros |
+| controllers | Autorizar recursos, aplicar regras e coordenar transações |
+| repositories/models | Consultar, reservar chaves, obter locks e persistir dados |
+| dtos | Selecionar os campos públicos e limitar a visibilidade por conta |
+| connectors | Consultar o bureau simulado, com timeout de conexão/leitura |
+| middlewares | Autenticar, correlacionar requisições, registrar logs e encerrar sessões |
 
-Primeiro commit preservado: 493b956c152589d2cea4d6c0023f5133c787e019.
-Commits usam a identidade Git previamente configurada, sem trailers de agentes.
-A validação inicial usou o commit a4ce6e9 no clone limpo. As regressões e
-correções posteriores estão registradas abaixo.
+Repositories não fazem commit. Cada controller usa o contexto de sessão da
+requisição. O middleware fecha a sessão em todos os caminhos; raiz e liveness
+não precisam abrir conexão com o banco. O [guia de organização](como-o-projeto-e-organizado.md)
+detalha esse ciclo e os arquivos envolvidos.
 
+## Cadastro, abertura e estados
 
-### Regressões de infraestrutura e erros públicos
+Cadastro PF/PJ normaliza e valida CPF/CNPJ numérico ou alfanumérico, preservando
+zeros e letras. A criação usa chave UUID durável por integrador/comando, com
+INSERT ON CONFLICT e SELECT separado para recuperar o resultado concorrente.
+Documento duplicado e chave com intenção diferente têm recusas distintas.
 
-Mantido o escopo bancário. Foram incorporadas as garantias de infraestrutura
-da base e conferido que os 27 códigos de erro possuem cenários pytest explícitos.
-Falhas de transporte, banco parado e sandbox desabilitado também rodam em pytest,
-em etapas controladas pelo host. Matriz em [erros-testes.md](erros-testes.md).
+A abertura persiste PENDING, saldo zero e evento inicial antes de consultar o
+bureau. A sessão é fechada durante o HTTP externo. Uma nova transação obtém
+FOR NO KEY UPDATE da conta e aplica a conclusão somente se ela continuar
+PENDING. REGULAR aprova; IRREGULAR/NOT_FOUND recusa; dívida é informativa.
+Falha técnica conserva pendência, retomada pelo mesmo POST/chave. GET só consulta.
 
-Dois testes novos falharam antes da correção: 500 perdia X-Request-ID; corpo
-JSON com UTF-8 inválido virava 500. Commit d09385c corrige a correlação e o
-mapeamento de formato inválido para 400/QIT000001. Nenhum endpoint legado foi
-ativado, e não houve alteração de schema, tarifa, saldo ou regra financeira.
+Bloqueio/desbloqueio usa expected_version, motivo e histórico de eventos.
+Reenvio da última transição não duplica histórico; uma versão antiga não
+reaplica bloqueio depois de desbloqueio. BLOCKED recebe créditos, mas não
+executa novos débitos. Replay monetário confirmado continua recuperável.
 
-Roteiro executado em qit-error-regression: 72 pytest principais em 10,10s,
-mais 5 pytest de falhas em etapas específicas; total 77 aprovados, além dos
-ensaios de calendário/reinício/recuperação. Roteiro completo: 84,6s.
-Clone limpo d09385c e volume novo: os mesmos 77 pytest e ensaios aprovados,
-em 87,6s. Toda a documentação técnica foi preservada nas fontes originais.
+## Escrita financeira
+
+Aporte e transferência seguem uma única fronteira de commit:
+
+1. Validar entrada, autenticar e autorizar a conta da rota; resolver o destino.
+2. Reservar imediatamente a chave por INSERT ON CONFLICT.
+3. Em conflito, fazer SELECT separado em READ COMMITTED e comparar a intenção.
+   Replay recupera operação e tarifa originais, sem revalidar saldo/estado/quota.
+4. Para Pix novo, coordenar o cliente antes das contas. Contas são bloqueadas
+   por ID crescente com FOR NO KEY UPDATE.
+5. Reler saldos/estados frescos e obter um único instante depois dos locks.
+6. Validar estado, principal+tarifa, teto do destino e quota compartilhada.
+7. Aplicar UPDATE relativo/RETURNING e inserir entries: principal antes da
+   tarifa na origem, somente principal no destino. Tarifa zero não cria entry.
+8. Fazer flush, preparar o DTO e confirmar um único COMMIT antes da resposta.
+
+Recusa pré-COMMIT desfaz a reserva e os efeitos. Perda da confirmação do COMMIT
+conserva resultado desconhecido e exige recuperação pela mesma chave. A chave
+não expira em 24 horas. Saldo atual e balance_after_cents são reconciliáveis
+pelos lançamentos confirmados.
+
+## Pix, consultas e privacidade
+
+Pix é uma modalidade local entre contas existentes. A quota soma somente o
+principal enviado em operações confirmadas do cliente, entre todas as suas
+contas. As janelas usam America/Sao_Paulo, e o período noturno atravessa a
+meia-noite sem reiniciar o consumo.
+
+Extrato usa cursor por entry_key, ordem decrescente e filtros temporais
+[from,to). O marcador precisa existir na conta e no intervalo autorizados.
+Detalhe é completo em ordem crescente e expõe somente as entries daquela
+conta; o destinatário vê seu crédito, sem saldo, tarifa global ou dados da
+contraparte.
+
+## Configuração e validação
+
+Compose constrói a imagem, mantém o banco em volume persistente e usa
+credenciais distintas para negócio e readiness. api-fee0 compartilha imagem e
+banco, com tarifas zero. O perfil fault adiciona uma instância e um proxy
+somente para ensaios de transporte. O relógio fixo só é permitido no ambiente
+test, sem endpoint/cabeçalho público para manipulá-lo.
+
+A suíte usa pytest e HTTP real com PostgreSQL, prepara cenários pelas rotas e
+substitui somente o bureau por MockServer. O roteiro `tools/verify.py` executa
+72 testes principais e 5 de falhas operacionais/transporte, além dos ensaios
+de calendário, reinício e recuperação. A [matriz de erros](erros-testes.md) cobre
+os 27 códigos públicos; [validacao.md](validacao.md) registra os resultados.
+
+A origem da API permanece no commit
+`493b956c152589d2cea4d6c0023f5133c787e019`, com os arquivos originais da Aula 1.
+O núcleo foi adaptado ao domínio bancário; os contratos didáticos de
+SampleEntity não integram as rotas atuais.

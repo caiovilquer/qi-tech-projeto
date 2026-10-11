@@ -1,100 +1,80 @@
-# Evidências de validação · 11/10/2026
+# Validação da API · 11/10/2026
 
-## Ampliação de regressões e erros públicos
+## Ambiente e resultados
 
-Código/testes do commit `d09385c`: **77 testes pytest aprovados**, sendo 72 na
-suíte principal e 5 nas etapas de transporte/erro operacional. Os 27 códigos
-públicos possuem cenários explícitos na [matriz de erros](erros-testes.md).
-Registros anteriores de 64 testes abaixo descrevem a validação inicial.
+Validação local em macOS com Docker Engine 29.8.2. Aplicação, PostgreSQL 16.15,
+MockServer 5.15.0 e pytest executados em containers Linux aarch64, com Python
+3.11 e as versões diretas fixadas da base.
 
-```bash
-python3 tools/verify.py --project qit-error-regression --port 3304
-```
+O código/testes do commit `d09385c` passou em **77 testes pytest**:
 
-Resultado: 72 pytest em 10,10s; 2 de transporte em 2,34s; erro inesperado,
-banco parado e sandbox desabilitado em execuções pytest específicas. Calendário,
-replay, reinícios, indisponibilidade e logs também aprovados. Total 84,6s.
-Dois defeitos foram observados em testes antes das correções: correlação ausente
-na resposta 500 e UTF-8 inválido classificado como erro interno.
+- 72 na suíte principal, em 10,10s.
+- 2 de falhas de transporte, em 2,34s.
+- 3 de erro inesperado, banco indisponível e sandbox desabilitado.
 
-Clone limpo do commit d09385c, volume novo qit-errors-clean_bank-data:
-72 pytest em 10,10s e 5 pytest operacionais/de transporte aprovados; todos os
-ensaios também aprovados. Roteiro completo 87,6s. Logs locais em
-`.git/error-clean-verification.log`.
+Calendário, replay, reinício, recuperação e sanitização de logs também foram
+verificados. O roteiro completo terminou em 84,6s. A repetição em clone limpo e
+volume novo passou nos mesmos 77 testes e ensaios, em 87,6s.
 
-## Validação inicial no ambiente local
-
-Docker Engine 29.8.2 em macOS; aplicação, PostgreSQL 16.15, MockServer 5.15.0 e
-pytest executados em containers Linux aarch64. Python 3.11, dependências diretas
-originais fixadas. Nenhum SQLite/mock de banco, importação de src nos testes,
-SQL para provar regras de negócio, teste ignorado ou placeholder.
-
-Comando completo:
+Para reproduzir em um projeto Compose isolado:
 
 ```bash
-python3 tools/verify.py --project qit-implementation --port 3000
+python3 tools/verify.py --project qit-verification --port 3300
 ```
 
-Resultado: **64 testes pytest aprovados em 9,45s**, mais os ensaios HTTP do host
-abaixo. Roteiro completo concluído em **81,6s**. O host controla reinícios,
-sem Docker socket no runner. Todas as primeiras tentativas concorrentes são
-avaliadas diretamente; não há retry automático na função de requisição.
+O host controla reinícios e falhas; o runner não recebe Docker socket. Setup e
+asserções de negócio passam pelas rotas HTTP. Nenhum teste importa código de
+src, consulta SQL para provar regras de negócio ou substitui PostgreSQL por
+SQLite/mock. Não há testes ignorados ou placeholders.
 
-| Área | Evidência executada |
+## Cenários executados
+
+| Área | Evidência |
 | --- | --- |
-| Identidade | PF/PJ, CPF/CNPJ numérico/alfanumérico, zeros iniciais, vetor da Receita, documentos inválidos, contexto/tokens e isolamento de contas |
-| Criação | Mesma chave/pedido e pedidos distintos entre processos; documento duplicado com chaves distintas; recuperação de identificador |
-| Bureau | Regular, irregular, não encontrado, dívida, HTTP inválido, corpo malformado, timeout; pendência retomável; resposta tardia/erro tardio não substituem conclusão |
-| Estado | Bloqueio/desbloqueio versionado, no-op, reenvio antigo, corrida de motivos distintos, bloqueio concorrente com débito; créditos em BLOCKED |
-| Dinheiro | Principal+tarifa, teto, inteiros sem coerção, zero fee sem delta zero, quatro tarifas PF/PJ/modalidade, recusa sem efeitos e reaproveitamento de chave recusada |
-| Concorrência | Gasto duplo, A↔B, mesma chave, conteúdo distinto, reserva abortada seguida de insert concorrente, quota entre contas do cliente |
-| Histórico | Soma de deltas e cada balance_after reconstroem saldo; saldos+fees=aportes; detalhe ASC e extrato DESC |
-| Consultas | Recebedor vê só crédito; outras contas não veem operação; cursor próprio/alheio/inválido, novas entradas entre páginas, filtros [from,to), fim e vazio |
-| Calendário | 19:59:59, 20:00:00, meia-noite, 05:59:59 e 06:00:00 em America/Sao_Paulo; quota noturna compartilhada sem reset à meia-noite |
-| Persistência | Reinícios de APIs e PostgreSQL conservam saldos, histórico, chaves e abertura pendente; retomada aprova a mesma conta |
-| Retenção/tarifa | Replay após mais de 24h e alteração de 200 para 999 conserva operação/fee original; operação nova usa tarifa nova |
-| Indisponibilidade | Banco parado: liveness 204, readiness/escrita 503; banco reiniciado recupera operação; bureau parado mantém PENDING e retoma na recuperação |
-| Sandbox/relógio | Aporte desabilitado não escreve; TEST_CLOCK recusado fora de APP_ENV=test; relógio só por startup, sem endpoint/cabeçalho |
-| Logs | Credenciais/documento fictício ausentes; confirmado/replay/desconhecido presentes; sem parâmetros SQL sensíveis |
+| Identidade | PF/PJ, CPF/CNPJ numérico/alfanumérico, zeros iniciais, documentos inválidos/duplicados e contexto autorizado |
+| Criação | Mesmo pedido/chave e intenções distintas entre processos; documento duplicado com chaves diferentes |
+| Bureau | Regular, irregular, não encontrado, dívida, corpo inválido, falha HTTP e timeout; retomada e conclusão única |
+| Estados | Bloqueio/desbloqueio versionado, no-op, reenvio antigo e corridas com débito ou outro comando administrativo |
+| Dinheiro | Principal+tarifa, teto, inteiros estritos, quatro tarifas PF/PJ/modalidade, tarifa zero sem delta zero e recusa sem efeitos |
+| Concorrência | Gasto duplo, A↔B, mesma chave, intenção distinta, reserva abortada e quota compartilhada entre contas |
+| Reconciliação | Deltas e balance_after_cents reconstroem saldo; saldos+tarifas correspondem aos aportes |
+| Consultas | Detalhe ASC, extrato DESC, destinatário isolado, cursor inválido/alheio, filtros, páginas finais/vazias e novas entradas |
+| Calendário | Bordas de 06h e 20h, meia-noite sem reset da quota noturna, limite exato e replay após mais de 24h |
+| Persistência | Reinícios de APIs/banco conservam saldos, histórico, chaves e abertura pendente; retomada usa a mesma conta |
+| Configuração | Tarifa alterada afeta operação nova e preserva replay; sandbox desabilitado; relógio de teste recusado no modo normal |
+| Infraestrutura | Raiz, liveness/readiness, credenciais separadas, 403/404/405, acentos e correlação de falhas 500 |
+| Logs | Ausência de credenciais/documentos e presença das classificações confirmado, replay e desconhecido |
 
-## Falhas reais de transporte
+A [matriz de erros](erros-testes.md) relaciona os 27 códigos públicos aos testes.
+As primeiras tentativas concorrentes são avaliadas sem retries; recuperação é
+verificada em cenários separados.
 
-`tests/fault_transport.py`, via proxy de protocolo PostgreSQL em perfil fault:
+## Falhas reais
 
-1. INSERT de operation interrompido antes de encaminhar ao banco:
-   503/QIT001014, sem dinheiro/histórico; mesma chave depois confirma uma vez.
-2. PostgreSQL devolve CommandComplete de COMMIT, proxy descarta confirmação:
-   503/QIT001027, dinheiro/histórico já persistidos; replay pela fee0 recupera
-   o UUID sem novo efeito. Portanto 503 não foi presumido como rollback.
+O perfil fault usa um proxy de protocolo PostgreSQL, com a mesma imagem da API:
 
-Nenhum failpoint na API, mock de repository ou SQL de assertiva financeira.
-api/api-fee0 usam o mesmo digest de imagem; configuração de tarifas é a diferença.
-O terceiro processo/proxy é exclusivo do ensaio e fica parado depois dele.
+1. INSERT de operation interrompido antes de ser encaminhado: 503/QIT001014,
+   sem saldo/entries; reenvio confirma uma única operação.
+2. CommandComplete de COMMIT descartado depois de o banco confirmar:
+   503/QIT001027 com dinheiro/histórico persistidos; mesma chave na fee0 recupera
+   o UUID sem novo débito.
+3. Arquivo de schema temporariamente indisponível na API de teste: 500 seguro,
+   preservando X-Request-ID e sem expor documento, credencial ou caminho interno.
 
-## Reprodutibilidade e limites
+Banco e bureau foram também parados pelo host e recuperados. O banco parado
+manteve liveness 204 e produziu readiness/escrita 503; o bureau indisponível
+conservou PENDING, retomado pelo mesmo POST/chave. Todos os testes de erro
+inesperado restauram a configuração do container ao final.
 
-- Schema gerado pela imagem testada corresponde ao database.sql.
-- 705 arquivos externos protegidos (site, fontes, análises, aulas, referências
-  e publicação) comparados por SHA-256: nenhum mudou.
-- O commit inicial contém exatamente os 67 arquivos do ZIP, respeitando apenas
-  a normalização LF já prevista na base; não foi reescrito.
-- Clone local limpo do commit `a4ce6e9`, em `.git/clean-checkout`, e volume novo
-  `qit-clean-validation_bank-data`: **64 pytest aprovados em 9,65s** e todos os
-  ensaios completos, em **79,7s**. Executado com
-  `python3 .git/clean-checkout/tools/verify.py --project qit-clean-validation --port 3301`.
-  API, PostgreSQL, MockServer e runner em containers Linux; arquivos somente do Git.
-  Logs locais em `.git/clean-verification.log`.
-- Workflow Ubuntu/GitHub Actions preparado, com limite de 15 minutos; não foi
-  executado remotamente. Os resultados acima são locais, em containers Linux.
-- Não houve deploy, push ou criação de repositório remoto. Pix e bureau são
-  simulações de sandbox, conforme a RFC.
+## Reprodutibilidade
 
-O harness restaura as duas APIs ao instante de teste padrão e sandbox habilitado,
-preservando o volume. Logs detalhados locais ficaram em `.git/verification-final.log`
-(fora da árvore versionada); esta síntese e o roteiro permitem reproduzir a prova.
+- Schema gerado pelos models corresponde ao database.sql de bootstrap.
+- Instalação em clone limpo usa somente arquivos versionados e volume novo.
+- APIs de teste usam a mesma imagem, variando apenas configuração de tarifas.
+- Reinícios preservam volumes; reset não é utilizado como atualização de dados.
+- Workflow GitHub Actions preparado para Ubuntu, com limite de 15 minutos.
+  Os resultados registrados aqui são da execução local em containers Linux.
 
-O Compose padrão `qit-banking` foi iniciado em sandbox com relógio normal e
-volume próprio novo, em localhost:3000; raiz HTTP 200 e readiness autenticada
-HTTP 204. Ambientes temporários qit-implementation e qit-clean-validation foram
-parados sem apagar seus volumes de dados fictícios. Git principal sem remote,
-sem alterações pendentes, e hash inicial/RFC/fontes protegidas auditados.
+O bootstrap inicializa somente volume novo. Evoluções de schema com dados
+existentes precisam de migração. Pix e bureau permanecem simulações de sandbox,
+conforme o escopo da RFC.
