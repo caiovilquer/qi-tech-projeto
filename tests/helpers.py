@@ -55,3 +55,21 @@ def parallel(actions):
         return f()
     with ThreadPoolExecutor(max_workers=len(actions)) as pool:
         return list(pool.map(run, actions))
+
+
+def bureau_rule(doc, status='REGULAR', debt=False, http=200, body=None, delay=None, times=None, priority=100):
+    match={'method':'POST','path':'/check','body':{'type':'JSON','json':{'document_number':doc},'matchType':'ONLY_MATCHING_FIELDS'}}
+    response={'statusCode':http,'headers':{'Content-Type':['application/json']},
+              'body':body if body is not None else {'status':status,'has_debt':debt,'reference':'test-only','checked_at':'2026-10-11T12:00:00Z'}}
+    if delay: response['delay']={'timeUnit':'MILLISECONDS','value':delay}
+    expectation={'httpRequest':match,'httpResponse':response,'priority':priority}
+    if times: expectation['times']={'remainingTimes':times,'unlimited':False}
+    r=requests.put(BUREAU+'/mockserver/expectation',json=expectation,timeout=(3,30)); assert r.status_code==201,r.text
+
+
+def account(c, key=None, url=API):
+    return ok(call('POST','/accounts',c,{'customer_key':c},key or uid(),url=url),201)['account_key']
+
+
+def balance(c,a):
+    return ok(call('GET','/accounts/'+a,c))['balance_cents']

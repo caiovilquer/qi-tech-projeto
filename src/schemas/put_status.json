@@ -1,0 +1,1 @@
+{"type":"object","additionalProperties":false,"required":["status","reason","expected_version"],"properties":{"status":{"enum":["ACTIVE","BLOCKED"]},"reason":{"type":"string","minLength":1,"maxLength":240,"pattern":"\\S"},"expected_version":{"type":"integer","minimum":1,"maximum":9223372036854775806}}}

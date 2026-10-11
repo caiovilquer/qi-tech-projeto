@@ -1,0 +1,1 @@
+{"type":"object","additionalProperties":false,"required":["customer_key"],"properties":{"customer_key":{"type":"string"}}}

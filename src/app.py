@@ -6,6 +6,7 @@ from middlewares import (register_session_manager_middleware, register_internal_
                          register_request_logger_middleware, register_request_context_middleware)
 from resources import HealthCheckResource
 from resources.customers import CustomerResource
+from resources.accounts import AccountResource
 from utils.logger import setup_logging
 
 
@@ -22,6 +23,11 @@ def create_app():
     customers = CustomerResource()
     application.add_api_route('/customers', customers.on_post, methods=['POST'])
     application.add_api_route('/customers/{customer_key}', customers.on_get, methods=['GET'])
+    accounts = AccountResource()
+    application.add_api_route('/accounts', accounts.on_post, methods=['POST'])
+    application.add_api_route('/accounts', accounts.on_get_list, methods=['GET'])
+    application.add_api_route('/accounts/{account_key}', accounts.on_get, methods=['GET'])
+    application.add_api_route('/accounts/{account_key}/status', accounts.on_put_status, methods=['PUT'])
     register_error_handlers(application)
     return application
 

@@ -47,3 +47,14 @@ recusa campos extras; validador de inteiros foi especializado para recusar
 floats integrais. Contexto delegado e DTO sem IDs/chaves internas. INSERT
 ON CONFLICT e SELECT separado arbitram criação entre processos.
 Suíte Linux HTTP: 10 aprovados, sem SQL de teste/importação de src.
+
+### Etapa 3 concluída
+
+Abertura cria PENDING/evento inicial antes do connector; fecha Session e libera
+a conexão antes de HTTP. Nova sessão relê a conta com NO KEY UPDATE. Conclusão
+única conserva evidência mínima; GET não conclui. Replay consulta o evento de
+abertura, mesmo após bloqueio. Comando de estado com versão, no-op e proteção
+contra reenvio antigo. Listagem e autorização por conta implantadas.
+Suíte Linux HTTP: 21 aprovados em 7,13s; bureau REGULAR/IRREGULAR/NOT_FOUND,
+dívida informativa, erro/timeout/malformado, retomada, resposta tardia,
+concorrência de abertura, versões e privacidade.
