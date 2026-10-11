@@ -67,6 +67,7 @@ services:
         condition: service_healthy
   db:
     build: ./database
+    command: [postgres, -c, log_min_error_statement=panic, -c, log_error_verbosity=terse]
     environment:
       POSTGRES_USER: bootcamp
       POSTGRES_PASSWORD: bootcamp

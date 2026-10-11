@@ -103,3 +103,38 @@ def test_credit_to_blocked_and_no_money_to_pending_rejected():
         error(deposit(e,x,1),'QIT001029',409)
         error(transfer(c,a,x,1),'QIT001029',409)
         assert balance(e,x)==0 and history(e,x)==[]
+
+
+def test_aborted_reservation_allows_concurrent_insert():
+    c,_=customer(); d,_=customer(); a=account(c); b=account(d)
+    ok(deposit(c,a,100),201); key=uid()
+    r=parallel([lambda:transfer(c,a,b,100,key),lambda:transfer(c,a,b,100,key,url=FEE0)])
+    # If fee0 wins first both recover its zero-fee fact. If normal API wins
+    # the reservation first, it refuses/rolls back and fee0 can insert.
+    assert r[1].status_code==201,r[1].text
+    assert r[0].status_code in (201,409),r[0].text
+    if r[0].status_code==409: error(r[0],'QIT001011',409)
+    else: assert r[0].json()==r[1].json()
+    assert balance(c,a)==0 and balance(d,b)==100
+    assert len(history(c,a))==2 and len(history(d,b))==1
+    reconcile(c,a); reconcile(d,b)
+
+
+def test_customer_key_namespace_spans_own_accounts():
+    c,_=customer(); d,_=customer(); a=account(c); b=account(c); dest=account(d)
+    ok(deposit(c,a,10000),201); ok(deposit(c,b,10000),201)
+    key=uid(); ok(transfer(c,a,dest,100,key),201)
+    error(transfer(c,b,dest,100,key),'QIT001012',409)
+    error(transfer(c,a,b,100,key),'QIT001012',409)
+    assert len(history(c,b))==1
+    reconcile(c,a); reconcile(c,b); reconcile(d,dest)
+
+
+def test_concurrent_key_with_different_amount_conflicts():
+    c,_=customer(); d,_=customer(); a=account(c); b=account(d)
+    ok(deposit(c,a,10000),201); key=uid()
+    r=parallel([lambda:transfer(c,a,b,1000,key),lambda:transfer(c,a,b,2000,key,url=FEE0)])
+    assert sorted(x.status_code for x in r)==[201,409]
+    error(next(x for x in r if x.status_code==409),'QIT001012',409)
+    assert len(history(d,b))==1
+    reconcile(c,a); reconcile(d,b)

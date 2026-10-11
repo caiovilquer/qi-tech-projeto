@@ -105,3 +105,18 @@ persistidos; replay na fee0 recupera a operação sem débito duplicado.
 failpoints na API, mock de banco ou socket Docker montado no runner.
 api/api-fee0 agora apontam explicitamente para a mesma tag/imagem construída;
 o terceiro processo existe somente para o ensaio de transporte.
+
+### Etapa 7: matriz e operação concluídas no checkout
+
+Roteiro `tools/verify.py` executado: 64 pytest HTTP aprovados e ensaios de
+calendário, disputa noturna de quota, >24h, tarifa alterada, abertura pendente
+retomada, reinícios reais, banco/bureau parados, sandbox desabilitado e recusa
+de relógio de teste no modo normal. Total 81,6s. Resultados em `validacao.md`.
+O verificador coleta logs antes de recriar containers, pois logs de um container
+removido não podem ser avaliados pela última consulta Compose.
+Revisão corrigiu credenciais não ASCII que poderiam levantar TypeError,
+conferências de saldo que dependiam de assert/PYTHONOPTIMIZE e semântica NULL
+no CHECK de evidência cadastral. Model/schema conferidos pela imagem testada.
+PostgreSQL omite statements/details sensíveis em logs de erro.
+README atualizado e workflow Ubuntu preparado (não executado remotamente).
+Próximo passo final: clone limpo/volume novo e auditoria do histórico/staging.

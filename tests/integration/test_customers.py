@@ -47,3 +47,27 @@ def test_official_alpha_example():
     assert r.status_code in (201,409)
     if r.status_code==409: error(r,'QIT001004',409)
     error(call('POST','/customers',body=dict(body,document_number='12ABC34501DE36'),key=uid()),'QIT001003',422)
+
+
+def test_concurrent_document_duplicate_and_key_conflict():
+    body={'customer_type':'PJ','name':'Concurrent company','document_number':document('PJ',True)}
+    r=parallel([lambda:call('POST','/customers',body=body,key=uid()),lambda:call('POST','/customers',body=body,key=uid(),url=FEE0)])
+    assert sorted(x.status_code for x in r)==[201,409]
+    error(next(x for x in r if x.status_code==409),'QIT001004',409)
+    key=uid(); first=dict(body,document_number=document('PJ'))
+    second=dict(first,name='Different valid intent')
+    r=parallel([lambda:call('POST','/customers',body=first,key=key),lambda:call('POST','/customers',body=second,key=key,url=FEE0)])
+    assert sorted(x.status_code for x in r)==[201,409]
+    error(next(x for x in r if x.status_code==409),'QIT001012',409)
+
+
+def test_leading_zero_documents_are_text():
+    doc=document()
+    # Generate check digits for a prefix with leading zero (independent vector).
+    prefix='0'+doc[1:9]
+    for size in (9,10):
+        remainder=sum(int(c)*w for c,w in zip(prefix,range(size+1,1,-1)))%11
+        prefix+=str(0 if remainder<2 else 11-remainder)
+    body={'customer_type':'PF','name':'Leading zero','document_number':prefix}
+    c=ok(call('POST','/customers',body=body,key=uid()),201)['customer_key']
+    assert ok(call('GET','/customers/'+c,c))['document_number']==prefix

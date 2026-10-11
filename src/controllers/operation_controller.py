@@ -1,7 +1,7 @@
 from controllers.account_controller import AccountController
 from controllers.transaction import db_action, commit
 from repositories.operation_repository import OperationRepository
-from errors import BankingError, InvalidParameter
+from errors import BankingError, InvalidParameter, InternalError
 from utils.validation import uuid_value, instant
 from dtos.banking_dto import operation_detail_dto, statement_dto
 from utils.pix_window import pix_window
@@ -58,12 +58,15 @@ class OperationController(AccountController):
                 raise BankingError('QIT001032')
         if origin:
             after=repo.delta(operation['id'],origin['id'],-amount,'TRANSFER_DEBIT',timestamp)
-            assert after==origin['balance_cents']-amount
+            if after != origin['balance_cents']-amount:
+                raise InternalError()
             if fee:
                 fee_after=repo.delta(operation['id'],origin['id'],-fee,'FEE_DEBIT',timestamp)
-                assert fee_after==after-fee
+                if fee_after != after-fee:
+                    raise InternalError()
         after=repo.delta(operation['id'],destination['id'],amount,'TRANSFER_CREDIT' if origin else 'DEPOSIT_CREDIT',timestamp)
-        assert after==destination['balance_cents']+amount
+        if after != destination['balance_cents']+amount:
+            raise InternalError()
         result={'operation_key':operation['operation_key']}
         commit(self)
         return result

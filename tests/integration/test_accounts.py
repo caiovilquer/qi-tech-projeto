@@ -48,9 +48,10 @@ def test_concurrent_open_and_versioned_status():
     assert ok(call('GET','/accounts/'+a,c))['status']=='ACTIVE'
 
 
-def test_late_external_response_cannot_replace_decision():
+@pytest.mark.parametrize("http",[200,503])
+def test_late_external_response_cannot_replace_decision(http):
     c,p=customer(); doc=p['document_number']; key=uid()
-    bureau_rule(doc,status='IRREGULAR',delay=1000,times=1,priority=200)
+    bureau_rule(doc,status='IRREGULAR',http=http,delay=1000,times=1,priority=200)
     with ThreadPoolExecutor(max_workers=2) as pool:
         late=pool.submit(call,'POST','/accounts',c,{'customer_key':c},key)
         time.sleep(.3)

@@ -51,7 +51,7 @@ account_status_event = Table('account_status_event', metadata, pk(), key('event_
     CK(f'previous_status IS NULL OR previous_status IN {STATES}'),
     CK("(version=1 AND previous_status IS NULL AND new_status='PENDING') OR (version>1 AND previous_status IS NOT NULL)"),
     CK("length(trim(reason)) > 0"),
-    CK("(previous_status='PENDING' AND new_status IN ('ACTIVE','REJECTED') AND bureau_reference IS NOT NULL AND bureau_checked_at IS NOT NULL AND has_debt IS NOT NULL) OR ((previous_status IS NULL OR previous_status<>'PENDING') AND bureau_reference IS NULL AND bureau_checked_at IS NULL AND has_debt IS NULL)"))
+    CK("(previous_status IS NOT NULL AND previous_status='PENDING' AND new_status IN ('ACTIVE','REJECTED') AND bureau_reference IS NOT NULL AND bureau_checked_at IS NOT NULL AND has_debt IS NOT NULL) OR ((previous_status IS NULL OR previous_status<>'PENDING') AND bureau_reference IS NULL AND bureau_checked_at IS NULL AND has_debt IS NULL)"))
 operation = Table('operation', metadata, pk(), key('operation_key'), fk('customer_id','customer'),
     C('type',String(8),nullable=False), C('modality',String(13)),
     fk('origin_account_id','account',True), fk('destination_account_id','account'),

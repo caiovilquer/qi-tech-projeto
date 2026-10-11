@@ -1,0 +1,16 @@
+name: Banking RFC v8
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and verify Linux containers
+        run: python3 tools/verify.py --project qit-ci --port 3300
+      - name: Sanitized application logs on failure
+        if: failure()
+        run: docker compose -p qit-ci --profile test --profile fault logs --no-color api api-fee0 api-fault
+      - name: Stop this job's containers
+        if: always()
+        run: docker compose -p qit-ci --profile test --profile fault down

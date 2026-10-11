@@ -59,7 +59,7 @@ CREATE TABLE account_status_event (
 	CHECK (previous_status IS NULL OR previous_status IN ('PENDING','ACTIVE','REJECTED','BLOCKED')),
 	CHECK ((version=1 AND previous_status IS NULL AND new_status='PENDING') OR (version>1 AND previous_status IS NOT NULL)),
 	CHECK (length(trim(reason)) > 0),
-	CHECK ((previous_status='PENDING' AND new_status IN ('ACTIVE','REJECTED') AND bureau_reference IS NOT NULL AND bureau_checked_at IS NOT NULL AND has_debt IS NOT NULL) OR ((previous_status IS NULL OR previous_status<>'PENDING') AND bureau_reference IS NULL AND bureau_checked_at IS NULL AND has_debt IS NULL)),
+	CHECK ((previous_status IS NOT NULL AND previous_status='PENDING' AND new_status IN ('ACTIVE','REJECTED') AND bureau_reference IS NOT NULL AND bureau_checked_at IS NOT NULL AND has_debt IS NOT NULL) OR ((previous_status IS NULL OR previous_status<>'PENDING') AND bureau_reference IS NULL AND bureau_checked_at IS NULL AND has_debt IS NULL)),
 	UNIQUE (event_key),
 	FOREIGN KEY(account_id) REFERENCES account (id) ON DELETE RESTRICT
 );
