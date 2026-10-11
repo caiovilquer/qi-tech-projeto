@@ -22,7 +22,7 @@ antes do bureau. Entradas JSON Schema estritas; consultas usam projeções
 frescas; NO KEY UPDATE mantém compatibilidade com KEY SHARE das FKs.
 
 A especificação copiada em [RFC-v8.md](RFC-v8.md) e seus diagramas preservam
-os caminhos relativos. G-09/G-10/G-11 seguem como confirmações externas.
+os caminhos relativos.
 
 ## Evidências e decisões locais
 

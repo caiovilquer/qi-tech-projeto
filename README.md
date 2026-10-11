@@ -246,6 +246,5 @@ Alterações futuras de schema com dados precisam de migração versionada.
 
 O histórico inicia no commit `493b956c152589d2cea4d6c0023f5133c787e019`, com os 67
 arquivos originais do ZIP da Aula 1 conferidos antes de qualquer mudança.
-A licença MIT original foi preservada. G-09 (rubrica), G-10 (logística) e G-11
-(autoria/responsáveis) continuam confirmações externas; não foram inventadas
-respostas. Não há publicação da API ou repositório remoto criado por este trabalho.
+A licença MIT original foi preservada. Não há publicação da API ou repositório
+remoto criado por este trabalho.

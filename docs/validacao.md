@@ -64,8 +64,8 @@ O terceiro processo/proxy é exclusivo do ensaio e fica parado depois dele.
   Logs locais em `.git/clean-verification.log`.
 - Workflow Ubuntu/GitHub Actions preparado, com limite de 15 minutos; não foi
   executado remotamente. Os resultados acima são locais, em containers Linux.
-- Não houve deploy, push, repositório remoto ou avaliação externa. G-09/G-10/G-11
-  continuam pendentes; não há alegação de Pix/bureau real ou conformidade integral.
+- Não houve deploy, push ou criação de repositório remoto. Pix e bureau são
+  simulações de sandbox, conforme a RFC.
 
 O harness restaura as duas APIs ao instante de teste padrão e sandbox habilitado,
 preservando o volume. Logs detalhados locais ficaram em `.git/verification-final.log`
