@@ -38,3 +38,12 @@ entidades criado em volume novo; readiness verifica suas colunas sem escrita.
 `docker compose -p qit-implementation --profile test run --rm runner`: 1 teste
 HTTP aprovado, incluindo sondas e separação das credenciais. Removidos os
 módulos/testes didáticos de SampleEntity após preservação no commit inicial.
+
+### Etapa 2 concluída
+
+Cadastro PF/PJ com normalização e validação CPF/CNPJ, incluindo vetor oficial
+alfanumérico `12.ABC.345/01DE-35` do manual da Receita Federal. JSON Schema
+recusa campos extras; validador de inteiros foi especializado para recusar
+floats integrais. Contexto delegado e DTO sem IDs/chaves internas. INSERT
+ON CONFLICT e SELECT separado arbitram criação entre processos.
+Suíte Linux HTTP: 10 aprovados, sem SQL de teste/importação de src.

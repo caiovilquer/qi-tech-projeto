@@ -2,7 +2,14 @@ import functools
 import json
 import os
 
-from jsonschema import RefResolver, ValidationError, validate
+from jsonschema import RefResolver, ValidationError, Draft7Validator, validators
+
+# JSON Schema normally accepts 1.0 as integer; financial input cannot.
+StrictValidator = validators.extend(Draft7Validator, type_checker=Draft7Validator.TYPE_CHECKER.redefine(
+    "integer", lambda checker, value: type(value) is int))
+
+def validate(instance, schema, resolver=None):
+    StrictValidator(schema, resolver=resolver).validate(instance)
 
 from constants import SCHEMA_PATH
 from errors import InvalidSchema
@@ -110,7 +117,7 @@ class SchemaHandler:
                 try:
                     validate(kwargs["payload"], schema, resolver=resolver)
                 except ValidationError as error:
-                    raise InvalidSchema(describe_schema_error(error))
+                    raise InvalidSchema("Invalid request schema")
 
                 return func(*args, **kwargs)
 
@@ -159,7 +166,7 @@ class SchemaHandler:
                 try:
                     validate(query_params, schema, resolver=resolver)
                 except ValidationError as error:
-                    raise InvalidSchema(describe_schema_error(error))
+                    raise InvalidSchema("Invalid request schema")
 
                 return func(*args, **kwargs)
 

@@ -1,0 +1,1 @@
+{"type":"object","additionalProperties":false,"required":["customer_type","name","document_number"],"properties":{"customer_type":{"enum":["PF","PJ"]},"name":{"type":"string"},"document_number":{"type":"string"},"email":{"type":["string","null"],"maxLength":254}}}

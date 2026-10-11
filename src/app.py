@@ -5,6 +5,7 @@ from errors.custom_errors import verify_catalog
 from middlewares import (register_session_manager_middleware, register_internal_token_middleware,
                          register_request_logger_middleware, register_request_context_middleware)
 from resources import HealthCheckResource
+from resources.customers import CustomerResource
 from utils.logger import setup_logging
 
 
@@ -18,6 +19,9 @@ def create_app():
     application.add_api_route('/', health.on_get_home, methods=['GET'])
     application.add_api_route('/health_check', health.on_get_health_check, methods=['GET'])
     application.add_api_route('/readiness', health.on_get_readiness, methods=['GET'])
+    customers = CustomerResource()
+    application.add_api_route('/customers', customers.on_post, methods=['POST'])
+    application.add_api_route('/customers/{customer_key}', customers.on_get, methods=['GET'])
     register_error_handlers(application)
     return application
 
