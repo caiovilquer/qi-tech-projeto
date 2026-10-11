@@ -3,7 +3,7 @@ from controllers.transaction import db_action, commit
 from repositories.operation_repository import OperationRepository
 from errors import BankingError, InvalidParameter
 from utils.validation import uuid_value, instant
-from dtos.banking_dto import utc
+from dtos.banking_dto import operation_detail_dto, statement_dto
 from utils.pix_window import pix_window
 import constants
 
@@ -74,9 +74,7 @@ class OperationController(AccountController):
         own=self.authorize(account_key,owner)
         op,entries=OperationRepository(self.context).detail(own['id'],key)
         if not entries: raise BankingError('QIT001028')
-        return {'operation_key':op['operation_key'],'account_key':own['account_key'],'type':op['type'],
-                'modality':op['modality'],'currency':'BRL','created_at':utc(op['created_at']),
-                'entries':[{k:r[k] for k in ['entry_key','role','delta_cents','balance_after_cents']} for r in entries]}
+        return operation_detail_dto(op, own['account_key'], entries)
 
     @db_action
     def statement(self, account_key, context_key, limit, cursor, filters):
@@ -88,5 +86,4 @@ class OperationController(AccountController):
         cursor=uuid_value(cursor,cursor=True) if cursor is not None else None
         rows=OperationRepository(self.context).statement(own['id'],limit,cursor,dates)
         if rows is None: raise BankingError('QIT001033')
-        data=[{k:(utc(r[k]) if k=='created_at' else r[k]) for k in ['entry_key','operation_key','role','delta_cents','balance_after_cents','created_at']} for r in rows[:limit]]
-        return {'data':data,'limit':limit,'next_cursor':data[-1]['entry_key'] if len(rows)>limit else None,'is_last_page':len(rows)<=limit}
+        return statement_dto(rows, limit)

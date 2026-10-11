@@ -27,11 +27,11 @@ def idempotency_key(request):
 
 
 def instant(value):
-    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})', value):
+    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)', value):
         raise InvalidSchema('RFC3339 timestamp with timezone required')
     try:
         return datetime.fromisoformat(value.upper().replace('Z', '+00:00')).astimezone(timezone.utc)
-    except ValueError:
+    except (ValueError, OverflowError):
         raise InvalidSchema('Invalid timestamp')
 
 

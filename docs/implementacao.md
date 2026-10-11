@@ -83,3 +83,13 @@ Pix entre contas próprias, limite exato, tarifas PF/PJ e replay preservados.
 APIs iniciadas em APP_ENV=test, TEST_CLOCK=2026-10-11T12:00:00Z; runner --no-deps
 para preservar essa configuração durante os testes (Compose run sem isso pode
 recriar dependências com ambiente diferente).
+
+### Etapa 6 concluída
+
+DTOs filtram detalhe por conta e extrato por lançamento. Cursor resolve apenas
+na conta/intervalo autorizados; entradas novas não deslocam páginas antigas.
+Datas RFC3339 com offset válido, [from,to), parâmetros desconhecidos/repetidos
+recusados. Destinatário vê somente seu crédito; sem IDs, tarifa global ou
+chave de idempotência. Detalhe ASC, extrato DESC; página vazia/final explícita.
+Suíte Linux HTTP: 57 aprovados; inclui corrida bloqueio/débito e comandos de
+estado distintos concorrentes, com reconciliação e primeira tentativa.
