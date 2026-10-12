@@ -11,7 +11,12 @@ HTTP → middlewares → resource/schema → controller → repository/model →
 - `app.py` registra endereços explícitos e handlers síncronos.
 - `resources/` adapta UUIDs, cabeçalhos, queries e JSON, sem SQL de negócio.
 - `schemas/` guarda contratos JSON Schema estritos; `utils/schema_handler.py`
-  especializa integer para recusar 1.0, strings e booleanos monetários.
+  especializa integer para recusar 1.0, strings e booleanos monetários, e string
+  para recusar NUL e Unicode inválido. O validador estende o Draft 7; a base usava
+  o padrão de `jsonschema.validate` (Draft 2020-12), e os schemas atuais não usam
+  palavra-chave que mude entre os dois.
+- Erros públicos seguem o envelope da base (description em inglês, translation em
+  português); `errors/custom_errors.py` recusa código repetido na inicialização.
 - `controllers/` autoriza os vínculos, aplica regras e coordena commit/rollback.
 - `repositories/` executa INSERT, SELECT, locks e UPDATE; nunca faz commit.
 - `models/banking.py` espelha as cinco tabelas via SQLAlchemy Core; leituras

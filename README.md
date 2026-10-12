@@ -5,10 +5,13 @@ simulado, aportes, transferências INTERNAL e PIX_SIMULATED, estados versionados
 e extrato por lançamento. BRL em centavos inteiros. Python 3.11, FastAPI,
 SQLAlchemy 2.0, psycopg2 e PostgreSQL 16, preservando as versões diretas da base.
 
-A especificação está disponível em [PDF](docs/RFC-v8.pdf) e
-[Markdown editável](docs/RFC-v8.md), com os diagramas em `docs/assets/`.
+A RFC, no modelo do bootcamp, está em [PDF](docs/RFC-v8.pdf) e
+[Markdown editável](docs/RFC-v8.md). A [especificação detalhada](docs/especificacao.md)
+reúne regras, dicionários de dados, o catálogo de erros, testes e operação.
 A [implementação](docs/implementacao.md) descreve a organização do código,
-os protocolos de escrita e a execução dos testes.
+os protocolos de escrita e a execução dos testes. Para regenerar o PDF depois
+de editar a RFC: `python3 tools/rfc_pdf.py` (Chrome ou Edge; baixa marked e
+mermaid em versões fixadas).
 
 ## Equipe
 
@@ -147,8 +150,9 @@ na conta/intervalo autorizados. Não há total, offset ou snapshot conjunto com
 saldo/detalhe. O detalhe é completo, em ordem crescente, sem dados da contraparte,
 IDs internos, fee_cents global ou chave idempotente.
 
-Erros seguem title/description/translation/code. O catálogo completo está na
-[RFC, seção 14](docs/RFC-v8.md#14-catálogo-de-erros-e-respostas-seguras). Recusas
+Erros seguem title/description/translation/code, com translation em português.
+O catálogo completo está na
+[especificação, seção 14](docs/especificacao.md#14-catálogo-de-erros-e-respostas-seguras). Recusas
 pré-COMMIT desfazem a reserva. QIT001027 significa confirmação desconhecida:
 um 503 não prova rollback; reenviar a mesma chave e corpo recupera o resultado.
 Consumidores podem fazer quatro reenvios após 0,5/1/2/4 s em timeout/rede/falha
@@ -166,7 +170,8 @@ Ele constrói imagens, roda pytest, interrompe transporte PostgreSQL, testa
 calendário com instantes fixos no startup, replay depois de 24h e alteração de
 tarifa, reinicia APIs/banco preservando volume, interrompe banco/bureau, testa
 sandbox desabilitado e confere logs. O roteiro fixa as tarifas e quotas da RFC
-para os testes, independentemente das personalizações no shell ou `.env`.
+para os testes, independentemente das personalizações no shell ou `.env`; as
+credenciais vêm do shell ou, na falta dele, dos valores de sandbox, nunca do `.env`.
 A terceira API/proxy existe somente no perfil fault; é parada também em caso
 de falha do roteiro. O runner não possui Docker socket.
 Os comandos são controlados pelo host, com assertivas de negócio apenas por HTTP.
@@ -181,6 +186,9 @@ docker compose --profile test run --rm --no-deps runner
 
 `--no-deps` preserva a configuração das APIs iniciadas no passo anterior.
 Também é possível `python3 tools/verify.py --suite-only --project qit-tests`.
+Diferente do guia da base, a suíte não roda com `pytest` direto no host:
+MockServer e api-fee0 só existem na rede do Compose, então use o runner.
+Os exemplos deste README estão em bash (Linux, macOS ou WSL).
 Os erros públicos têm cenários HTTP explícitos em pytest, conforme a
 [matriz de testes de erros](docs/erros-testes.md). As regressões de infraestrutura
 da base incluem 403, 404, 405 e acentos, junto das sondas atuais. Falhas de banco,
@@ -198,8 +206,8 @@ Modo normal recusa TEST_CLOCK. api-fee0 usa exatamente a mesma imagem/banco e
 quatro tarifas zero; não é outro serviço financeiro.
 
 Resultados executados estão em [docs/validacao.md](docs/validacao.md). O workflow
-GitHub Actions está preparado para Ubuntu, com limite de 15 minutos; execução
-local em containers Linux não significa que o workflow remoto já rodou.
+do GitHub Actions executa o roteiro completo em Ubuntu a cada push e pull
+request, com limite de 15 minutos; os resultados ficam na aba Actions.
 
 ## Camadas, operação e persistência
 
