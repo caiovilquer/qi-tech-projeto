@@ -119,7 +119,7 @@ class SchemaHandler:
 
                 try:
                     validate(kwargs["payload"], schema, resolver=resolver)
-                except ValidationError as error:
+                except ValidationError:
                     raise InvalidSchema("Invalid request schema")
 
                 return func(*args, **kwargs)
@@ -132,12 +132,16 @@ class SchemaHandler:
     def validate_query_params(schema_file_name: str):
         """Decorator que valida a QUERY STRING antes de o resource rodar.
 
-        Nenhuma rota atual usa este decorator: as rotas paginadas conferem
-        a query com query() e query_integer(), de utils/validation.py. Ele
-        ficou da base para uma rota que descreva a query num schema, assim:
+        Hoje nenhuma rota usa este decorator: os filtros do extrato e a
+        paginacao das contas sao conferidos em utils/validation.py, que
+        tambem recusa parametro desconhecido ou repetido. Ele fica para
+        quem quiser descrever uma query string em JSON Schema.
 
-            class AlgumResource:
-                @SchemaHandler.validate_query_params("get_algo.json")
+        Usaria-se assim, num metodo que recebe a requisicao inteira (o
+        schema do exemplo nao existe em src/schemas/):
+
+            class AccountResource:
+                @SchemaHandler.validate_query_params("get_accounts.json")
                 def on_get_list(self, request: Request) -> JSONResponse:
 
         Por que ler do `request` em vez dos argumentos da funcao: o
@@ -145,7 +149,8 @@ class SchemaHandler:
         nome errado — `?stauts=pending` — nunca chegaria aqui, e passaria
         batido como passa hoje em qualquer API que so declara o que
         conhece. Lendo a query string crua, o `additionalProperties:
-        false` do schema pega o engano e responde dizendo o nome errado.
+        false` do schema pega o engano e responde 400, com mensagem
+        generica: a resposta nunca ecoa o que veio na requisicao.
 
         O segundo detalhe e a LISTA. Na query string, `?status=a&status=b`
         e o mesmo campo repetido, e nada no texto diz se `?status=a`
@@ -170,7 +175,7 @@ class SchemaHandler:
 
                 try:
                     validate(query_params, schema, resolver=resolver)
-                except ValidationError as error:
+                except ValidationError:
                     raise InvalidSchema("Invalid request schema")
 
                 return func(*args, **kwargs)
@@ -199,21 +204,3 @@ def query_params_to_dict(query_params, schema: dict) -> dict:
             parsed_params[param_name] = query_params[param_name]
 
     return parsed_params
-
-
-def describe_schema_error(error: ValidationError) -> str:
-    """Diz o que estava errado e ONDE, quando o campo é aninhado.
-
-    O jsonschema já escreve uma boa mensagem ("'hello' is a required
-    property"), mas ela não diz em que parte do JSON o problema está.
-    Para um campo na raiz isso não faz falta; para um campo dentro de
-    uma lista dentro de um objeto, faz toda.
-    """
-    location = []
-    for part in error.absolute_path:
-        location.append(str(part))
-
-    if location:
-        return f"{error.message} in {'.'.join(location)}"
-
-    return error.message

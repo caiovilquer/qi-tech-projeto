@@ -36,7 +36,7 @@ de regras, sessões ou banco. O MockServer representa somente o bureau externo.
 | QIT001031 | 503 | Bureau indisponível, malformado, referência com NUL/Unicode inválido ou timeout mantém PENDING e permite retomada da mesma conta; [test_accounts.py](../tests/integration/test_accounts.py) |
 | QIT001032 | 409 | Quota Pix compartilhada insuficiente; [test_pix.py](../tests/integration/test_pix.py) e ensaios de calendário |
 | QIT001033 | 400 | Cursor inválido, alheio ou fora do intervalo; [test_queries.py](../tests/integration/test_queries.py) |
-| QIT001034 | 409 | Versão obsoleta e comandos administrativos concorrentes incompatíveis; testes de contas e consultas |
+| QIT001034 | 409 | Versão obsoleta, comandos administrativos concorrentes incompatíveis e reenvio que apontaria para a decisão do bureau; testes de contas e consultas |
 | QIT001035 | 403 | Sandbox desabilitado recusa aporte sem mudar saldo/histórico; [operational_errors.py](../tests/operational_errors.py) |
 
 ## Falhas observadas antes das correções
@@ -52,6 +52,11 @@ de regras, sessões ou banco. O MockServer representa somente o bureau externo.
 - Uma referência de bureau com NUL produzia 500 sem `details.account_key`.
   Referências inválidas agora retornam `503/QIT001031`, mantendo PENDING e
   permitindo a retomada pelo mesmo POST/chave.
+- Um comando de estado com `expected_version=1` (a versão PENDING) e motivo
+  `REGULAR` era aceito como reenvio da decisão do bureau e respondia 200. Agora
+  só uma transição administrativa é reconhecida como reenvio: `409/QIT001034`.
+- O campo `translation` dos códigos bancários repetia a descrição em inglês.
+  Agora traz o texto em português, como os erros da base.
 
 Esses cenários são reproduzidos pelo roteiro `tools/verify.py`. No ensaio de
 schema ausente, a instrumentação altera somente o container descartável
@@ -64,5 +69,7 @@ Docker socket no runner.
 A suíte preserva os comportamentos dos seis testes de infraestrutura originais:
 raiz 200, liveness 204, token ausente 403, rota ausente 404, método indevido 405
 e acentos nas traduções de erros. Os contratos atuais da RFC são conferidos
-junto dessas garantias, incluindo o nome `banking-api` e readiness separada.
+junto dessas garantias, incluindo o nome `banking-api`, readiness separada e
+tradução em português também nos códigos bancários
+([test_health.py](../tests/integration/test_health.py)).
 As verificações relacionadas a `SampleEntity` não fazem parte do domínio bancário.

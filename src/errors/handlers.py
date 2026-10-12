@@ -6,7 +6,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from errors.base_error import (
     QIException,
     InternalError,
-    InvalidParameter,
     InvalidSchema,
     MethodNotAllowed,
     NotFoundResource,
@@ -52,20 +51,6 @@ def unexpected_error_to_response(request: Request, exception: Exception) -> JSON
     return qi_exception_to_response(InternalError())
 
 
-def describe_validation_error(error: dict) -> str:
-    location = []
-    for part in error.get("loc", []):
-        if part not in ("body", "query"):
-            location.append(str(part))
-
-    message = error.get("msg", "invalid value")
-
-    if location:
-        return f"{message} in {'.'.join(location)}"
-
-    return message
-
-
 def register_error_handlers(application: FastAPI) -> None:
     """Ensina a aplicação a responder cada tipo de erro."""
 
@@ -91,34 +76,16 @@ def register_error_handlers(application: FastAPI) -> None:
 
     @application.exception_handler(RequestValidationError)
     def handle_validation_error(request: Request, exception: RequestValidationError) -> JSONResponse:
-        errors = exception.errors()
-
-        if errors:
-            first_error = errors[0]
-        else:
-            first_error = {}
-
-        description = describe_validation_error(first_error)
-        origin = first_error.get("loc", [""])[0]
-
-        # Este ramo NAO e alcancado hoje, e vale saber por que — e a
-        # unica pista de que existem duas validacoes neste projeto, nao
-        # uma.
+        # Existem duas validacoes neste projeto, nao uma. A query string e
+        # os cabecalhos sao julgados antes do controller, em
+        # utils/validation.py: um ?page=-3 morre la, com 400 QIT000001. Os
+        # parametros de endereco sao todos `str`, que nao tem como falhar.
         #
-        # Quem julga a query string aqui sao os resources, com query() e
-        # query_integer() de utils/validation.py, antes do FastAPI. Um
-        # ?page=-3 morre la, com 400 QIT000001 — nunca chega a virar
-        # RequestValidationError. E os parametros de endereco sao todos
-        # `str`, que nao tem como falhar validacao.
-        #
-        # O ramo fica de pe para o dia em que alguma rota declarar um
-        # parametro tipado (page: int) e passar a depender do FastAPI
-        # para isso. O QIT000010 que o cliente ve hoje vem de outro
-        # lugar: do controller do extrato, quando created_at_from nao
-        # precede created_at_to.
-        if origin in ("query", "path"):
-            return qi_exception_to_response(InvalidSchema("Invalid request format"))
-
+        # Sobra para o FastAPI o corpo que nem chega a ser um objeto JSON
+        # (sintaxe invalida, lista, corpo vazio). A resposta nao repete a
+        # mensagem dele, que pode ecoar o conteudo recebido. O QIT000010
+        # vem de outro lugar: do controller do extrato, quando
+        # created_at_from >= created_at_to.
         return qi_exception_to_response(InvalidSchema("Invalid request format"))
 
     @application.exception_handler(Exception)

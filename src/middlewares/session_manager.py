@@ -37,8 +37,8 @@ def register_session_manager_middleware(application: FastAPI) -> None:
 
     Quem sabe se o trabalho terminou é o controller, não a camada de
     fora. Abra src/controllers/operation_controller.py: em `write`, o
-    `commit(self)` de src/controllers/transaction.py é o ÚLTIMO passo
-    antes do `return` — depois que todas as regras passaram, nunca antes.
+    `commit(self)` é a ÚLTIMA linha antes do `return` — depois que a
+    regra passou, nunca antes.
 
     Com o commit aqui, esse controle sumiria. Uma rota que grava e depois
     descobre que não podia teria a gravação salva assim mesmo, porque a
@@ -90,17 +90,17 @@ def register_session_manager_middleware(application: FastAPI) -> None:
     ────────────────────────────────────────────────────────────────
     Os dois caminhos acima cobram o mesmo preço, e ele está nas duas
     perguntas `if context.db_session is not None` logo abaixo. Elas parecem
-    burocracia e não são: sem elas, a API quebra. A base deste projeto
-    rodou o erro de propósito, ainda com as rotas de exemplo, a lista de
-    exceções e um `finally` desprotegido:
+    burocracia e não são: sem elas, a API quebra. Este projeto rodou o
+    erro de propósito, com a lista de exceções e um `finally`
+    desprotegido:
 
         finally:
             context.db_session.close()
 
-        GET /                        -> 500
-        GET /health_check            -> 500
-        GET  (rota que usa banco)    -> 200
-        POST (rota que usa banco)    -> 201
+        GET /                    -> 500
+        GET /health_check        -> 500
+        GET /sample_entities     -> 200
+        POST /sample_entity      -> 201
 
         AttributeError: 'NoneType' object has no attribute 'close'
 
@@ -135,8 +135,9 @@ def register_session_manager_middleware(application: FastAPI) -> None:
     ONDE ELE FICA NA PILHA
     ────────────────────────────────────────────────────────────────
     É o mais INTERNO dos middlewares, encostado nas rotas — e por isso é
-    o PRIMEIRO registrado no src/app.py, não o último (o comentário de lá
-    explica por que a lista de registro é o espelho do diagrama).
+    o PRIMEIRO registrado no src/app.py, não o último: no FastAPI, o
+    ÚLTIMO middleware registrado é a casca de FORA, então a lista de
+    registro é o espelho da pilha.
     Requisição sem o INTERNAL-TOKEN leva 403 na camada de cima e nem
     chega aqui: quem não passou na porta não precisa de uma sessão de
     banco.

@@ -31,6 +31,15 @@ base=['docker','compose','-p',args.project,'--profile','test','--profile','fault
 state={}
 collected=[]
 started=time.monotonic()
+BUREAU_LOADED='''import os,time,requests
+deadline=time.monotonic()+60
+while time.monotonic()<deadline:
+    try:
+        r=requests.put(os.environ['BUREAU_URL']+'/mockserver/retrieve?type=ACTIVE_EXPECTATIONS',timeout=(3,5))
+        if r.status_code==200 and r.json(): raise SystemExit(0)
+    except (requests.RequestException,ValueError): pass
+    time.sleep(.5)
+raise SystemExit('MockServer did not load config/bureau.json in 60s')'''
 
 
 def command(arguments, capture=False, expected_failure=False):
@@ -105,9 +114,9 @@ try:
     command(['stop','bureau'])
     scenario('bureau_down')
     command(['start','bureau'])
-    # MockServer may take a few seconds to boot. The API itself has no retries.
-    command(['run','--rm','--no-deps','runner','python','-c',
-             'import time; time.sleep(5)'])
+    # MockServer takes a few seconds to boot and load config/bureau.json. Wait
+    # for that expectation instead of a fixed pause; the API itself has no retries.
+    command(['run','--rm','--no-deps','runner','python','-c',BUREAU_LOADED])
     scenario('bureau_recovered')
     keep_logs()
     env['SANDBOX_DEPOSITS']='false'

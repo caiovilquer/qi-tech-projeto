@@ -48,6 +48,13 @@ def test_concurrent_open_and_versioned_status():
     assert ok(call('GET','/accounts/'+a,c))['status']=='ACTIVE'
 
 
+def test_status_command_cannot_replay_bureau_decision():
+    c,_=customer(); a=account(c); path='/accounts/'+a+'/status'
+    # Version 1 was PENDING; the bureau, not a status command, produced version 2.
+    error(call('PUT',path,c,{'status':'ACTIVE','reason':'REGULAR','expected_version':1}),'QIT001034',409)
+    assert ok(call('GET','/accounts/'+a,c))['status_version']==2
+
+
 @pytest.mark.parametrize("http",[200,503])
 def test_late_external_response_cannot_replace_decision(http):
     c,p=customer(); doc=p['document_number']; key=uid()
