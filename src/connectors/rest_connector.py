@@ -11,10 +11,14 @@ class RestConnector(metaclass=ABCMeta):
     """O que todo connector tem em comum: como falar com outro serviço.
 
     Este arquivo é pra chamada HTTP o que o database.py é pro banco: o
-    ÚNICO lugar que sabe COMO se fala com um serviço de fora. Quem
+    lugar que sabe COMO se fala com um serviço INTERNO da QI. Quem
     precisa de outro serviço não escreve requests.get() no meio do
-    código — cria um connector (veja o bankslip_connector.py) e chama
-    um método com nome de gente.
+    código — cria um connector e chama um método com nome de gente.
+
+    Hoje nenhum connector herda daqui (o bankslip_connector.py da base
+    saiu junto com o SampleEntity). O bureau_connector.py não herda de
+    propósito: o `send` abaixo repassa o INTERNAL-TOKEN, que é a
+    credencial do integrador e não pode ir para um parceiro externo.
 
     O que mora aqui, e por quê:
 

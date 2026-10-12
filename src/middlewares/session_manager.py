@@ -36,9 +36,9 @@ def register_session_manager_middleware(application: FastAPI) -> None:
     então commita. E seria errado.
 
     Quem sabe se o trabalho terminou é o controller, não a camada de
-    fora. Abra src/controllers/sample_entity_controller.py: em `create` e
-    em `update_status`, o `self.session.commit()` é a ÚLTIMA linha antes
-    do `return` — depois que a regra passou, nunca antes.
+    fora. Abra src/controllers/operation_controller.py: em `write`, o
+    `commit(self)` é a ÚLTIMA linha antes do `return` — depois que a
+    regra passou, nunca antes.
 
     Com o commit aqui, esse controle sumiria. Uma rota que grava e depois
     descobre que não podia teria a gravação salva assim mesmo, porque a
@@ -135,8 +135,9 @@ def register_session_manager_middleware(application: FastAPI) -> None:
     ONDE ELE FICA NA PILHA
     ────────────────────────────────────────────────────────────────
     É o mais INTERNO dos middlewares, encostado nas rotas — e por isso é
-    o PRIMEIRO registrado no src/app.py, não o último (o comentário de lá
-    explica por que a lista de registro é o espelho do diagrama).
+    o PRIMEIRO registrado no src/app.py, não o último: no FastAPI, o
+    ÚLTIMO middleware registrado é a casca de FORA, então a lista de
+    registro é o espelho da pilha.
     Requisição sem o INTERNAL-TOKEN leva 403 na camada de cima e nem
     chega aqui: quem não passou na porta não precisa de uma sessão de
     banco.
