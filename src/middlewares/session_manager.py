@@ -36,9 +36,9 @@ def register_session_manager_middleware(application: FastAPI) -> None:
     então commita. E seria errado.
 
     Quem sabe se o trabalho terminou é o controller, não a camada de
-    fora. Abra src/controllers/sample_entity_controller.py: em `create` e
-    em `update_status`, o `self.session.commit()` é a ÚLTIMA linha antes
-    do `return` — depois que a regra passou, nunca antes.
+    fora. Abra src/controllers/operation_controller.py: em `write`, o
+    `commit(self)` de src/controllers/transaction.py é o ÚLTIMO passo
+    antes do `return` — depois que todas as regras passaram, nunca antes.
 
     Com o commit aqui, esse controle sumiria. Uma rota que grava e depois
     descobre que não podia teria a gravação salva assim mesmo, porque a
@@ -90,17 +90,17 @@ def register_session_manager_middleware(application: FastAPI) -> None:
     ────────────────────────────────────────────────────────────────
     Os dois caminhos acima cobram o mesmo preço, e ele está nas duas
     perguntas `if context.db_session is not None` logo abaixo. Elas parecem
-    burocracia e não são: sem elas, a API quebra. Este projeto rodou o
-    erro de propósito, com a lista de exceções e um `finally`
-    desprotegido:
+    burocracia e não são: sem elas, a API quebra. A base deste projeto
+    rodou o erro de propósito, ainda com as rotas de exemplo, a lista de
+    exceções e um `finally` desprotegido:
 
         finally:
             context.db_session.close()
 
-        GET /                    -> 500
-        GET /health_check        -> 500
-        GET /sample_entities     -> 200
-        POST /sample_entity      -> 201
+        GET /                        -> 500
+        GET /health_check            -> 500
+        GET  (rota que usa banco)    -> 200
+        POST (rota que usa banco)    -> 201
 
         AttributeError: 'NoneType' object has no attribute 'close'
 

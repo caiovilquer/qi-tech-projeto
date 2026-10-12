@@ -91,16 +91,16 @@ class SchemaHandler:
 
         Usa-se assim, no método do resource que recebe corpo:
 
-            class SampleEntityResource:
-                @SchemaHandler.validate("post_sample_entity.json")
-                def on_post(self, payload: dict) -> dict:
+            class CustomerResource:
+                @SchemaHandler.validate("post_customer.json")
+                def on_post(self, request: Request, payload: dict):
 
         O nome do arquivo é o único argumento, e ele aponta pra dentro
         de src/schemas/. Método que não recebe corpo — um GET, um
         DELETE — não leva decorator nenhum: não há o que conferir.
 
         Repare que o endereço HTTP não aparece aqui. Quem liga
-        "/sample_entity" a este método é o src/app.py, e é de propósito:
+        "/customers" a este método é o src/app.py, e é de propósito:
         o resource cuida do CONTEÚDO da requisição, o app.py cuida do
         ENDEREÇO dela.
         """
@@ -132,10 +132,12 @@ class SchemaHandler:
     def validate_query_params(schema_file_name: str):
         """Decorator que valida a QUERY STRING antes de o resource rodar.
 
-        Usa-se assim, num metodo que recebe a requisicao inteira:
+        Nenhuma rota atual usa este decorator: as rotas paginadas conferem
+        a query com query() e query_integer(), de utils/validation.py. Ele
+        ficou da base para uma rota que descreva a query num schema, assim:
 
-            class SampleEntityResource:
-                @SchemaHandler.validate_query_params("get_sample_entities.json")
+            class AlgumResource:
+                @SchemaHandler.validate_query_params("get_algo.json")
                 def on_get_list(self, request: Request) -> JSONResponse:
 
         Por que ler do `request` em vez dos argumentos da funcao: o
