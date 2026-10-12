@@ -36,8 +36,10 @@ Falha técnica conserva pendência, retomada pelo mesmo POST/chave. GET só cons
 
 Bloqueio/desbloqueio usa expected_version, motivo e histórico de eventos.
 Reenvio da última transição não duplica histórico; uma versão antiga não
-reaplica bloqueio depois de desbloqueio. BLOCKED recebe créditos, mas não
-executa novos débitos. Replay monetário confirmado continua recuperável.
+reaplica bloqueio depois de desbloqueio. Só uma transição administrativa é
+reconhecida como reenvio: a decisão do bureau que tirou a conta de PENDING
+nunca foi um comando de estado. BLOCKED recebe créditos, mas não executa
+novos débitos. Replay monetário confirmado continua recuperável.
 
 ## Escrita financeira
 
@@ -83,7 +85,7 @@ test, sem endpoint/cabeçalho público para manipulá-lo.
 
 A suíte usa pytest e HTTP real com PostgreSQL, prepara cenários pelas rotas e
 substitui somente o bureau por MockServer. O roteiro `tools/verify.py` executa
-85 testes principais e 5 de falhas operacionais/transporte, além dos ensaios
+87 testes principais e 5 de falhas operacionais/transporte, além dos ensaios
 de calendário, reinício e recuperação. A [matriz de erros](erros-testes.md) cobre
 os 27 códigos públicos; [validacao.md](validacao.md) registra os resultados.
 
@@ -91,7 +93,9 @@ Textos com NUL ou sequências Unicode inválidas são recusados antes da escrita
 400/QIT000001 na entrada do integrador e 503/QIT001031 com a conta PENDING para
 uma referência inválida do bureau. A retomada preserva a chave e a conta.
 O ensaio de resposta tardia usa uma barreira HTTP no mock externo, liberada
-somente depois da conclusão concorrente, sem depender de pausas fixas.
+somente depois da conclusão concorrente, sem depender de pausas fixas. Depois
+de reiniciar o MockServer, o roteiro aguarda o carregamento de
+`config/bureau.json` em vez de uma pausa fixa.
 
 A origem da API permanece no commit
 `493b956c152589d2cea4d6c0023f5133c787e019`, com os arquivos originais da Aula 1.
