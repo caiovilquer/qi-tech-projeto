@@ -1,6 +1,6 @@
 import requests
 import constants
-from utils.validation import instant
+from utils.validation import instant, valid_text
 from errors import InvalidSchema
 
 
@@ -14,7 +14,7 @@ class BureauConnector:
             data = response.json()
             if not isinstance(data, dict) or data.get('status') not in ('REGULAR','IRREGULAR','NOT_FOUND'):
                 return None
-            if type(data.get('has_debt')) is not bool or not isinstance(data.get('reference'),str) or not 1<=len(data['reference'])<=120:
+            if type(data.get('has_debt')) is not bool or not valid_text(data.get('reference')) or not 1<=len(data['reference'])<=120:
                 return None
             checked = instant(data.get('checked_at'))
             return {'status':data['status'],'has_debt':data['has_debt'],'reference':data['reference'],'checked_at':checked}

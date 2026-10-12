@@ -114,7 +114,8 @@ as suas contas e modalidades. Não existe expiração em 24 horas.
 
 POSTs exigem Idempotency-Key UUID. Todas as rotas da tabela exigem INTERNAL-TOKEN;
 exceto POST /customers, exigem CUSTOMER-KEY. JSON estrito recusa campos extras,
-strings/booleanos/floats monetários. Principal 1..2^53−1; saldo/tarifa 0..2^53−1.
+strings/booleanos/floats monetários. Textos com NUL ou Unicode inválido retornam
+400/QIT000001. Principal 1..2^53−1; saldo/tarifa 0..2^53−1.
 CPF/CNPJ são texto, com zeros e letras preservados. CNPJ alfanumérico usa o
 [algoritmo oficial da Receita Federal](https://www.gov.br/receitafederal/pt-br/centrais-de-conteudo/publicacoes/documentos-tecnicos/cnpj/manual-dv-cnpj.pdf).
 
@@ -164,11 +165,13 @@ python3 tools/verify.py --project qit-verification --port 3300
 Ele constrói imagens, roda pytest, interrompe transporte PostgreSQL, testa
 calendário com instantes fixos no startup, replay depois de 24h e alteração de
 tarifa, reinicia APIs/banco preservando volume, interrompe banco/bureau, testa
-sandbox desabilitado e confere logs. A terceira API/proxy existe somente no
-perfil fault; é parada depois do ensaio. O runner não possui Docker socket.
+sandbox desabilitado e confere logs. O roteiro fixa as tarifas e quotas da RFC
+para os testes, independentemente das personalizações no shell ou `.env`.
+A terceira API/proxy existe somente no perfil fault; é parada também em caso
+de falha do roteiro. O runner não possui Docker socket.
 Os comandos são controlados pelo host, com assertivas de negócio apenas por HTTP.
 
-Para apenas a suíte principal:
+Para apenas a suíte principal, usando as tarifas e quotas padrão:
 
 ```bash
 APP_ENV=test TEST_CLOCK=2026-10-11T12:00:00Z \

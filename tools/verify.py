@@ -19,7 +19,10 @@ parser.add_argument('--suite-only',action='store_true')
 args=parser.parse_args()
 if not re.fullmatch(r'[a-z0-9][a-z0-9-]*',args.project): raise SystemExit('Invalid project name')
 env=dict(os.environ,APP_ENV='test',TEST_CLOCK='2026-10-11T12:00:00Z',API_PORT=args.port,
-         BANKING_IMAGE=args.project+'-api:local',SANDBOX_DEPOSITS='true',FEE_PF_INTERNAL='200')
+         BANKING_IMAGE=args.project+'-api:local',SANDBOX_DEPOSITS='true',
+         FEE_PF_INTERNAL='200',FEE_PJ_INTERNAL='500',
+         FEE_PF_PIX_SIMULATED='0',FEE_PJ_PIX_SIMULATED='100',
+         PIX_DAY_LIMIT='1000000',PIX_NIGHT_LIMIT='100000')
 base=['docker','compose','-p',args.project,'--profile','test','--profile','fault']
 state={}
 started=time.monotonic()
@@ -113,5 +116,6 @@ except Exception:
     raise
 finally:
     # Restore the test configuration used by the main suite and stop fault tools.
+    command(['stop','api-fault','db-proxy'])
     env.update(TEST_CLOCK='2026-10-11T12:00:00Z',FEE_PF_INTERNAL='200',SANDBOX_DEPOSITS='true')
     command(['up','-d','--wait','api','api-fee0'])

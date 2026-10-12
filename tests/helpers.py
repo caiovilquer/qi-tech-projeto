@@ -1,8 +1,12 @@
 import os
 import random
+import json
+import socket
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event, Thread
 import requests
 from conftest import API, TOKEN
 
@@ -65,6 +69,56 @@ def bureau_rule(doc, status='REGULAR', debt=False, http=200, body=None, delay=No
     expectation={'httpRequest':match,'httpResponse':response,'priority':priority}
     if times: expectation['times']={'remainingTimes':times,'unlimited':False}
     r=requests.put(BUREAU+'/mockserver/expectation',json=expectation,timeout=(3,30)); assert r.status_code==201,r.text
+
+
+@contextmanager
+def paused_bureau(doc, http):
+    """Gate one real bureau response until the competing API has committed.
+
+    MockServer forwards only this document's first check to the runner. The
+    runner stays on the Compose network and needs no Docker or database access.
+    """
+    arrived, release = Event(), Event()
+    body = json.dumps({'status':'IRREGULAR', 'has_debt':False,
+                       'reference':'late-test', 'checked_at':'2026-10-11T12:00:00Z'}).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get('Content-Length', 0)))
+            arrived.set()
+            if not release.wait(timeout=15):
+                self.send_error(504)
+                return
+            self.send_response(http)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(('0.0.0.0', 0), Handler)
+    thread = Thread(target=server.serve_forever, kwargs={'poll_interval':0.05}, daemon=True)
+    thread.start()
+    try:
+        bureau_rule(doc)
+        expectation = {
+            'httpRequest': {'method':'POST', 'path':'/check', 'body':{
+                'type':'JSON', 'json':{'document_number':doc}, 'matchType':'ONLY_MATCHING_FIELDS'}},
+            'httpForward': {'host':socket.gethostbyname(socket.gethostname()),
+                            'port':server.server_port, 'scheme':'HTTP'},
+            'times': {'remainingTimes':1, 'unlimited':False},
+            'priority':200,
+        }
+        response = requests.put(BUREAU+'/mockserver/expectation', json=expectation, timeout=(3,30))
+        assert response.status_code == 201, response.text
+        yield arrived, release
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def account(c, key=None, url=API):

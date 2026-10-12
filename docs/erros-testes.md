@@ -11,7 +11,7 @@ de regras, sessões ou banco. O MockServer representa somente o bureau externo.
 
 | Código | HTTP | Cenário pytest |
 | --- | --- | --- |
-| QIT000001 | 400 | JSON inválido, UTF-8 inválido, campos extras, valores monetários não inteiros, UUIDs e estados inválidos; [test_errors.py](../tests/integration/test_errors.py) e testes de contratos |
+| QIT000001 | 400 | JSON inválido, UTF-8 inválido, NUL e surrogates isolados em textos, campos extras, valores monetários não inteiros, UUIDs e estados inválidos; [test_errors.py](../tests/integration/test_errors.py) e testes de contratos |
 | QIT000002 | 403 | Token interno ausente/incorreto, inclusive antes do roteamento; [test_health.py](../tests/integration/test_health.py) |
 | QIT000004 | 403 | Readiness sem credencial de monitoramento válida; [test_health.py](../tests/integration/test_health.py) |
 | QIT000005 | 403 | Contexto de cliente ausente; [test_customers.py](../tests/integration/test_customers.py) |
@@ -33,7 +33,7 @@ de regras, sessões ou banco. O MockServer representa somente o bureau externo.
 | QIT001028 | 404 | Operação inexistente ou sem lançamento na conta autorizada; [test_queries.py](../tests/integration/test_queries.py) |
 | QIT001029 | 409 | Estado impede a ação; PENDING/REJECTED sem movimentação e BLOCKED sem novo débito; testes de contas e dinheiro |
 | QIT001030 | 422 | Bureau irregular/não encontrado recusa abertura, preservando conta e chave próprias; [test_accounts.py](../tests/integration/test_accounts.py) |
-| QIT001031 | 503 | Bureau indisponível, malformado ou em timeout mantém PENDING; [test_accounts.py](../tests/integration/test_accounts.py) |
+| QIT001031 | 503 | Bureau indisponível, malformado, referência com NUL/Unicode inválido ou timeout mantém PENDING e permite retomada da mesma conta; [test_accounts.py](../tests/integration/test_accounts.py) |
 | QIT001032 | 409 | Quota Pix compartilhada insuficiente; [test_pix.py](../tests/integration/test_pix.py) e ensaios de calendário |
 | QIT001033 | 400 | Cursor inválido, alheio ou fora do intervalo; [test_queries.py](../tests/integration/test_queries.py) |
 | QIT001034 | 409 | Versão obsoleta e comandos administrativos concorrentes incompatíveis; testes de contas e consultas |
@@ -46,9 +46,16 @@ de regras, sessões ou banco. O MockServer representa somente o bureau externo.
   retorna o envelope seguro e registra resultado desconhecido.
 - O teste de corpo JSON com UTF-8 inválido recebeu 500. A exceção HTTP 400 do
   parser agora vira `400/QIT000001`, sem expor bytes ou detalhes internos.
+- NUL e surrogates Unicode isolados em nome, email e motivo chegavam ao banco
+  e produziam 500. A validação agora retorna `400/QIT000001`, preservando chave,
+  estado e versão; acentos e emojis válidos continuam aceitos.
+- Uma referência de bureau com NUL produzia 500 sem `details.account_key`.
+  Referências inválidas agora retornam `503/QIT001031`, mantendo PENDING e
+  permitindo a retomada pelo mesmo POST/chave.
 
-Esses cenários são reproduzidos pelo roteiro `tools/verify.py`. A instrumentação
-altera somente o container descartável `api-fault` e restaura o arquivo ao final.
+Esses cenários são reproduzidos pelo roteiro `tools/verify.py`. No ensaio de
+schema ausente, a instrumentação altera somente o container descartável
+`api-fault` e restaura o arquivo ao final.
 O controle das falhas fica no host, sem endpoint de instrumentação na API e sem
 Docker socket no runner.
 

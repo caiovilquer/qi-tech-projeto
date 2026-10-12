@@ -3,10 +3,13 @@ import json
 import os
 
 from jsonschema import RefResolver, ValidationError, Draft7Validator, validators
+from utils.validation import valid_text
 
 # JSON Schema normally accepts 1.0 as integer; financial input cannot.
-StrictValidator = validators.extend(Draft7Validator, type_checker=Draft7Validator.TYPE_CHECKER.redefine(
-    "integer", lambda checker, value: type(value) is int))
+StrictValidator = validators.extend(Draft7Validator, type_checker=Draft7Validator.TYPE_CHECKER.redefine_many({
+    "integer": lambda checker, value: type(value) is int,
+    "string": lambda checker, value: valid_text(value),
+}))
 
 def validate(instance, schema, resolver=None):
     StrictValidator(schema, resolver=resolver).validate(instance)

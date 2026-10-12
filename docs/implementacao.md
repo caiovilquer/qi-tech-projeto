@@ -83,9 +83,15 @@ test, sem endpoint/cabeçalho público para manipulá-lo.
 
 A suíte usa pytest e HTTP real com PostgreSQL, prepara cenários pelas rotas e
 substitui somente o bureau por MockServer. O roteiro `tools/verify.py` executa
-72 testes principais e 5 de falhas operacionais/transporte, além dos ensaios
+85 testes principais e 5 de falhas operacionais/transporte, além dos ensaios
 de calendário, reinício e recuperação. A [matriz de erros](erros-testes.md) cobre
 os 27 códigos públicos; [validacao.md](validacao.md) registra os resultados.
+
+Textos com NUL ou sequências Unicode inválidas são recusados antes da escrita:
+400/QIT000001 na entrada do integrador e 503/QIT001031 com a conta PENDING para
+uma referência inválida do bureau. A retomada preserva a chave e a conta.
+O ensaio de resposta tardia usa uma barreira HTTP no mock externo, liberada
+somente depois da conclusão concorrente, sem depender de pausas fixas.
 
 A origem da API permanece no commit
 `493b956c152589d2cea4d6c0023f5133c787e019`, com os arquivos originais da Aula 1.

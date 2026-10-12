@@ -2,36 +2,73 @@
 
 ## Ambiente e resultados
 
-Validação local em macOS com Docker Engine 29.8.2. Aplicação, PostgreSQL 16.15,
-MockServer 5.15.0 e pytest executados em containers Linux aarch64, com Python
-3.11 e as versões diretas fixadas da base.
+Revisão local em WSL2/Linux x86_64, com Docker Engine 29.8.1 e Compose 5.5.1.
+Aplicação, PostgreSQL 16.15, MockServer 5.15.0 e pytest executados em containers
+Linux, com Python 3.11.17 e as dependências diretas fixadas da base.
 
-O código/testes do commit `d09385c` passou em **77 testes pytest**:
+Base versionada: `5ff7373`, acrescida das correções locais desta revisão.
+Resultado final: **90 testes pytest aprovados**, sem falhas ou testes ignorados:
 
-- 72 na suíte principal, em 10,10s.
-- 2 de falhas de transporte, em 2,34s.
-- 3 de erro inesperado, banco indisponível e sandbox desabilitado.
+| Etapa | Resultado | Duração |
+| --- | --- | --- |
+| Suíte principal | 85 aprovados | 16,32s |
+| Falhas reais de transporte PostgreSQL | 2 aprovados | 3,95s |
+| Erro inesperado com resposta segura | 1 aprovado | 0,06s |
+| Banco indisponível | 1 aprovado | 0,10s |
+| Sandbox desabilitado | 1 aprovado | 1,16s |
 
-Calendário, replay, reinício, recuperação e sanitização de logs também foram
-verificados. O roteiro completo terminou em 84,6s. A repetição em clone limpo e
-volume novo passou nos mesmos 77 testes e ensaios, em 87,6s.
+Calendário, replay após 24h, mudança de tarifa, reinícios, recuperação e
+sanitização dos logs também passaram. O roteiro completo registrou **154,5s**
+e terminou com código de saída zero, incluindo a restauração final das APIs.
 
 Para reproduzir em um projeto Compose isolado:
 
 ```bash
-python3 tools/verify.py --project qit-verification --port 3300
+python3 tools/verify.py --project qit-audit-20261011 --port 3400
 ```
+
+O projeto Compose da auditoria possui volume próprio, criado no primeiro ensaio
+e preservado durante as repetições. Os projetos preexistentes `qit-banking` e
+`qit-verification` não foram usados para provocar falhas ou reinícios.
+Ao final, os containers da auditoria foram encerrados com `down`, sem remover
+o volume. As imagens dos ambientes preexistentes não foram reconstruídas.
+
+A execução final também verificou o isolamento da configuração: o shell
+forneceu tarifas 888/777/333/444 e quotas diurna/noturna de 1 centavo; o roteiro
+aplicou os valores de teste da RFC e todos os cenários passaram.
 
 O host controla reinícios e falhas; o runner não recebe Docker socket. Setup e
 asserções de negócio passam pelas rotas HTTP. Nenhum teste importa código de
 src, consulta SQL para provar regras de negócio ou substitui PostgreSQL por
 SQLite/mock. Não há testes ignorados ou placeholders.
 
+## Problemas encontrados e corrigidos
+
+- A execução inicial teve 71 aprovações e uma falha em
+  `test_late_external_response_cannot_replace_decision[200]`, em 105,72s.
+  O teste supunha uma ordem de execução a partir de pausas de 300ms/1s e
+  passou quando repetido isoladamente. Agora o mock encaminha a primeira
+  consulta a uma resposta HTTP controlada pelo runner, liberada apenas após
+  a conclusão concorrente. O teste verifica essa ordem sem retries.
+- Nome, email e motivo com NUL ou surrogates Unicode isolados provocavam
+  500/QIT000500. Agora são recusados com 400/QIT000001, sem consumir a chave
+  de cadastro nem alterar estado/versão. Acentos e emojis válidos são aceitos.
+- Referência inválida do bureau provocava 500 sem a chave da conta pendente.
+  Agora retorna 503/QIT001031 com `details.account_key`, mantém PENDING e
+  permite retomar a mesma conta pelo mesmo POST/chave.
+- O runner herdava parte das tarifas/quotas do ambiente local. O roteiro
+  agora fixa todas elas para a suíte e encerra as ferramentas de falha no
+  `finally`, inclusive se uma etapa não passar.
+
+Foram acrescentados 13 casos HTTP de regressão. Antes do roteiro completo,
+os 29 testes de abertura e erros passaram em uma execução dirigida de 9,98s.
+
 ## Cenários executados
 
 | Área | Evidência |
 | --- | --- |
 | Identidade | PF/PJ, CPF/CNPJ numérico/alfanumérico, zeros iniciais, documentos inválidos/duplicados e contexto autorizado |
+| Textos | NUL e Unicode inválido recusados; chave, estado e versão preservados; acentos e emojis válidos |
 | Criação | Mesmo pedido/chave e intenções distintas entre processos; documento duplicado com chaves diferentes |
 | Bureau | Regular, irregular, não encontrado, dívida, corpo inválido, falha HTTP e timeout; retomada e conclusão única |
 | Estados | Bloqueio/desbloqueio versionado, no-op, reenvio antigo e corridas com débito ou outro comando administrativo |
@@ -69,12 +106,24 @@ inesperado restauram a configuração do container ao final.
 ## Reprodutibilidade
 
 - Schema gerado pelos models corresponde ao database.sql de bootstrap.
-- Instalação em clone limpo usa somente arquivos versionados e volume novo.
-- APIs de teste usam a mesma imagem, variando apenas configuração de tarifas.
+- Bootstrap executado em volume isolado novo; repetições conservaram os dados.
+- API principal e api-fee0 usam a mesma imagem/banco, variando as tarifas;
+  api-fault usa essa imagem com acesso ao banco pelo proxy de teste.
 - Reinícios preservam volumes; reset não é utilizado como atualização de dados.
+- `docker compose --profile test --profile fault config -q` e `pip check`
+  passaram; sintaxe Python, JSONs, SVGs e links locais da documentação conferidos.
+- O PDF da RFC foi aberto e teve suas 17 páginas e 18 seções verificadas.
 - Workflow GitHub Actions preparado para Ubuntu, com limite de 15 minutos.
-  Os resultados registrados aqui são da execução local em containers Linux.
+  Esta revisão não executou o workflow remoto nem mediu cobertura de linhas.
 
 O bootstrap inicializa somente volume novo. Evoluções de schema com dados
 existentes precisam de migração. Pix e bureau permanecem simulações de sandbox,
 conforme o escopo da RFC.
+
+## Registro anterior
+
+O registro preservado da validação em macOS, Docker Engine 29.8.2 e Linux
+aarch64 refere-se ao código/testes de `d09385c`: 77 testes aprovados
+(72 principais, 2 de transporte e 3 operacionais), com roteiro de 84,6s e
+repetição em clone limpo/volume novo de 87,6s. Esses números são históricos;
+os resultados atuais em WSL2 estão detalhados acima.

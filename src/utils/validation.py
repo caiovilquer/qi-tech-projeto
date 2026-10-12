@@ -4,6 +4,17 @@ from uuid import UUID
 from errors import InvalidSchema, BankingError
 
 
+def valid_text(value):
+    """Text must be representable in PostgreSQL UTF-8, including JSONB."""
+    if not isinstance(value, str) or '\x00' in value:
+        return False
+    try:
+        value.encode('utf-8')
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def uuid_value(value, cursor=False):
     try:
         if not isinstance(value, str) or not re.fullmatch(r'[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', value):

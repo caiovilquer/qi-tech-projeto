@@ -1,4 +1,4 @@
-import time
+import json
 import pytest
 from concurrent.futures import ThreadPoolExecutor
 from helpers import *
@@ -51,14 +51,35 @@ def test_concurrent_open_and_versioned_status():
 @pytest.mark.parametrize("http",[200,503])
 def test_late_external_response_cannot_replace_decision(http):
     c,p=customer(); doc=p['document_number']; key=uid()
-    bureau_rule(doc,status='IRREGULAR',http=http,delay=1000,times=1,priority=200)
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with paused_bureau(doc, http) as (arrived, release), ThreadPoolExecutor(max_workers=1) as pool:
         late=pool.submit(call,'POST','/accounts',c,{'customer_key':c},key)
-        time.sleep(.3)
-        bureau_rule(doc,priority=300)
-        winner=call('POST','/accounts',c,{'customer_key':c},key,url=FEE0)
-        assert ok(late.result(),201)==ok(winner,201)
+        try:
+            assert arrived.wait(timeout=10), 'First request did not reach the bureau'
+            winner=call('POST','/accounts',c,{'customer_key':c},key,url=FEE0)
+            approved=ok(winner,201)
+            assert not late.done(), 'The gated request finished before the bureau was released'
+        finally:
+            release.set()
+        assert ok(late.result(timeout=30),201)==approved
     a=winner.json()['account_key']; assert ok(call('GET','/accounts/'+a,c))['status_version']==2
+
+
+@pytest.mark.parametrize('invalid', ['\x00', '\ud800', '\udfff'], ids=['nul', 'high-surrogate', 'low-surrogate'])
+def test_invalid_bureau_reference_keeps_pending_and_allows_resume(invalid):
+    c,p=customer(); key=uid()
+    # Raw JSON preserves invalid Unicode escapes across the external mock.
+    body=json.dumps({'status':'REGULAR', 'has_debt':False, 'reference':'Test'+invalid,
+                     'checked_at':'2026-10-11T12:00:00Z'})
+    bureau_rule(p['document_number'],body=body)
+    response=call('POST','/accounts',c,{'customer_key':c},key)
+    error(response,'QIT001031',503)
+    a=response.json()['details']['account_key']
+    pending=ok(call('GET','/accounts/'+a,c))
+    assert pending['status']=='PENDING' and pending['status_version']==1
+    assert pending['balance_cents']==0
+    bureau_rule(p['document_number'],priority=200)
+    assert account(c,key)==a
+    assert ok(call('GET','/accounts/'+a,c))['status_version']==2
 
 
 def test_account_access_and_listing():
