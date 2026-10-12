@@ -1,3 +1,4 @@
+from uuid import uuid4
 import requests
 from conftest import API, TOKEN, MONITOR
 
@@ -64,3 +65,18 @@ def test_error_translation_keeps_original_accents():
     assert missing.status_code == 404
     assert missing.json()['code'] == 'QIT000404'
     assert missing.json()['translation'] == NOT_FOUND_TRANSLATION
+
+
+def test_banking_errors_follow_base_translation_convention():
+    unknown = str(uuid4())
+    cases = [
+        ('QIT000004', 'Credencial de monitoramento obrigatória', requests.get(API+'/readiness', timeout=(3,30))),
+        ('QIT000005', 'Contexto do cliente obrigatório',
+         requests.get(API+'/accounts', headers={'INTERNAL-TOKEN': TOKEN}, timeout=(3,30))),
+        ('QIT001008', 'Cliente indisponível', requests.get(API+'/customers/'+unknown, timeout=(3,30),
+                                                           headers={'INTERNAL-TOKEN': TOKEN, 'CUSTOMER-KEY': unknown})),
+    ]
+    for code, translation, response in cases:
+        assert response.json()['code'] == code, response.text
+        assert response.json()['translation'] == translation, response.text
+        assert response.json()['description'] != translation
