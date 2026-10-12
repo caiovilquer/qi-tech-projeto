@@ -1,4 +1,4 @@
-# RFC — Protótipo bancário com movimentação idempotente e extrato que reconstrói o saldo
+# RFC: Protótipo bancário com movimentação idempotente e extrato que reconstrói o saldo
 
 | | |
 |---|---|
@@ -52,34 +52,29 @@ flowchart LR
     C --> O["DTO<br/>campos públicos"]
 ```
 
-- `Microsserviços para cliente, conta e operação` — descartada porque débito, crédito e tarifa
-  deixariam de caber num único COMMIT e exigiriam saga e reconciliação. Ganharia se as partes
-  precisassem escalar ou ser implantadas de forma independente, por times diferentes.
-- `Isolamento SERIALIZABLE no lugar de locks explícitos` — descartada porque abortos de
-  serialização obrigariam a reexecutar a transação em todos os caminhos de escrita. Ganharia se
-  houvesse muitos caminhos de escrita com acesso imprevisível, em que manter uma ordem global de
-  locks fosse inviável.
-- `Chave de idempotência em cache com TTL de 24 h` — descartada porque uma intenção incerta
-  reenviada depois da expiração seria debitada de novo. Ganharia se o volume de chaves impedisse
-  guardá-las junto do fato financeiro e o consumidor tivesse prazo garantido para reenviar.
-- `Paginação do extrato por offset` — descartada porque lançamentos novos deslocam as páginas
-  durante a navegação. Ganharia se o consumidor precisasse saltar para uma página arbitrária ou
-  exibir o total de itens.
+Cada decisão abaixo traz o motivo, a alternativa que foi considerada e descartada, com o cenário
+em que ela seria a melhor escolha, e o custo que o time aceitou pagar.
 
-As decisões tomadas, com o motivo de cada uma e o preço que o time aceitou pagar:
+| Decisão | Por que foi tomada | Alternativa descartada e quando ela ganharia | Custo aceito |
+|---|---|---|---|
+| Monólito sobre um único PostgreSQL | Cliente, conta, tarifa e lançamentos dividem a mesma fronteira de COMMIT, e é essa fronteira que dá a garantia sobre o dinheiro. | Microsserviços para cliente, conta e operação. Débito, crédito e tarifa deixariam de caber num único COMMIT e pediriam saga e reconciliação. Ganhariam se as partes precisassem escalar ou ser implantadas separadamente, por times diferentes. | Implantação e disponibilidade são compartilhadas por todas as partes. |
+| Clientes PF e PJ, um titular por conta e várias contas por cliente | O mesmo núcleo atende os dois tipos de cliente e permite exercitar a autorização entre contas e os limites compartilhados. | Atender só PF, que reduziria o escopo e deixaria a tarifa por tipo de titular sem uso, ou conta conjunta, que pediria outro modelo de titularidade. A conta conjunta ganharia se o produto exigisse cotitulares. | Dois validadores de documento e quatro combinações de tarifa para testar. A quota Pix é do cliente e não se multiplica por conta. |
+| Identidade delegada ao integrador, com INTERNAL-TOKEN e CUSTOMER-KEY | O integrador já autentica os usuários e os representantes de empresas. A API só precisa conferir os vínculos entre cliente, conta e lançamento. | Um token pessoal por correntista, que duplicaria emissão, entrega, recuperação e rotação de segredo. Ganharia se os usuários acessassem a API diretamente ou se houvesse vários integradores. | Um integrador comprometido pode declarar qualquer cliente dele. Por isso a API confere cliente e conta em todo pedido e o token nunca sai do backend. |
+| Bureau simulado, consultado fora da transação, com a conta PENDING gravada antes | O simulador dá resultados reproduzíveis, sem custo e sem dados reais. Uma chamada HTTP externa não pode segurar lock nem conexão do banco, e a falha do bureau vira um estado que o mesmo pedido retoma. | Uma fila com worker que concluísse a análise sozinho. Seria mais uma peça para operar e monitorar. Ganharia se a conta precisasse ser concluída sem depender de um reenvio do integrador. | Sem reenvio, a conta pode ficar PENDING por tempo indefinido. A dívida informada pelo bureau é só registrada, porque o produto não oferece crédito. |
+| Estado atual, eventos e versão na conta | O estado responde às consultas, os eventos explicam cada mudança e a versão separa um comando antigo de uma decisão nova. | Guardar só o status. Perderia a trilha das mudanças e deixaria um bloqueio antigo valer de novo depois de um desbloqueio. Ganharia se não houvesse comandos concorrentes nem necessidade de auditoria. | O integrador precisa enviar a versão que leu, e estado e evento são confirmados sempre juntos. |
+| Pix local, com quota por cliente somada dos lançamentos confirmados | Exercita uma modalidade com regra própria sem liquidação externa. Somar os lançamentos evita um segundo número para reconciliar com o histórico. | Um contador de quota em tabela própria, que tornaria a leitura mais barata mas criaria outro estado para manter coerente. Ganharia com muitos Pix por cliente na mesma janela. | Uma soma por Pix, feita sob o lock do cliente. Um Pix real, com SPI e DICT, pediria outro desenho. |
+| Dinheiro em centavos inteiros (BIGINT), com teto de 2^53−1 | Inteiro não tem erro de ponto flutuante nem pede regra de arredondamento, e o teto cabe num número JSON lido por JavaScript. | NUMERIC ou decimal. Ganharia com juros, câmbio ou escala variável, que estão fora do escopo. | Valores fracionários de centavo não são representáveis. |
+| Saldo materializado na conta e um lançamento por efeito | O saldo se lê direto, e o histórico explica e reconcilia cada mudança. | Calcular o saldo somando o histórico a cada consulta. Tiraria a redundância, mas encareceria toda leitura e não dispensaria coordenar os débitos. Ganharia com histórico curto e leitura rara. | Toda escrita precisa atualizar saldo e histórico na mesma transação, e os testes conferem que os dois sempre batem. |
+| Chave de idempotência arbitrada por `UNIQUE` no banco, sem expirar | Só a unicidade resolve a corrida entre processos: consultar antes e inserir depois deixa uma janela. A recusa desfaz a reserva, e o reenvio devolve o fato original com a tarifa que foi gravada. | Chave em cache com TTL de 24 h. Uma intenção incerta reenviada depois da expiração seria debitada de novo. Ganharia se o volume de chaves impedisse guardá-las junto do fato financeiro e o consumidor tivesse prazo garantido para reenviar. | A chave fica guardada enquanto o fato financeiro existir. |
+| READ COMMITTED com `FOR NO KEY UPDATE` em ordem fixa | `NO KEY UPDATE` serializa saldo e estado sem bloquear a checagem das chaves estrangeiras de quem insere uma operação para a mesma conta. Em READ COMMITTED, o `SELECT` feito depois do `ON CONFLICT` enxerga o vencedor recém-confirmado. | Isolamento SERIALIZABLE, cujos abortos obrigariam a reexecutar a transação em todos os caminhos de escrita. Ganharia com muitos caminhos de escrita de acesso imprevisível, em que uma ordem global de locks fosse inviável. | Todo caminho de escrita precisa seguir a ordem cliente, depois contas por id, com leitura fresca e atualização relativa do saldo. |
+| Instante lido com `clock_timestamp()` depois dos locks | A janela do Pix e o extrato usam o instante em que a regra foi de fato avaliada. | Usar `now()`, que é o início da transação e ficaria anterior a uma espera longa por lock. Ganharia se nenhuma regra dependesse do horário. | Uma leitura extra do relógio por escrita. |
+| Saldo na própria conta, detalhe por conta e extrato por cursor | A consulta da conta já devolve o saldo, cada titular vê só os lançamentos da sua conta e o cursor mantém a posição enquanto entram lançamentos novos. | Uma rota de saldo separada, que duplicaria o dado, e paginação por offset, em que lançamentos novos deslocam as páginas. O offset ganharia se fosse preciso saltar para uma página arbitrária ou exibir o total de itens. | O extrato não tem total nem salto de página, e saldo, extrato e detalhe são leituras independentes, sem instantâneo comum. |
+| Testes por HTTP, com PostgreSQL real e só o bureau simulado | Exercitam o contrato e os efeitos entre processos, que é onde a concorrência acontece. | Testes com repositório simulado, mais rápidos, mas que não provariam concorrência real. Ganhariam para regra pura, sem banco. | A suíte custa mais para rodar, e concorrência e recuperação são ensaiadas em etapas separadas. |
 
-| Decisão | Por que foi tomada | Custo aceito |
-|---|---|---|
-| Monólito sobre um único PostgreSQL | Cliente, conta, tarifa e lançamentos dividem a mesma fronteira de COMMIT, e é ela que dá a garantia sobre o dinheiro. | Implantação e disponibilidade são compartilhadas por todas as partes. |
-| Identidade delegada ao integrador (INTERNAL-TOKEN mais CUSTOMER-KEY) | O integrador já autentica os usuários; um token por correntista duplicaria emissão, entrega, recuperação e rotação de segredo. | Um integrador comprometido pode declarar qualquer cliente dele. Por isso a API confere cliente e conta em todo pedido. |
-| Bureau consultado fora da transação, com PENDING gravado antes | Uma chamada HTTP externa não pode segurar lock nem conexão do banco, e a falha do bureau vira um estado que o mesmo pedido retoma. | Sem reenvio, a conta fica PENDING: não há fila nem worker para concluir sozinho. |
-| Dinheiro em centavos inteiros (BIGINT), com teto de 2^53−1 | Inteiro não tem erro de ponto flutuante nem pede regra de arredondamento, e o teto cabe num número JSON lido por JavaScript. | Não serve a juros, câmbio ou escala variável, que pediriam NUMERIC. |
-| Saldo materializado na conta e um lançamento por efeito | O saldo se lê direto, e o histórico explica e reconcilia cada mudança. Somar o histórico a cada consulta custaria mais e não dispensaria coordenar os débitos. | Toda escrita precisa atualizar saldo e histórico na mesma transação. |
-| Chave de idempotência arbitrada por `UNIQUE` no banco, sem expirar | Só a unicidade resolve a corrida entre processos: consultar antes e inserir depois deixa uma janela. | A chave fica guardada enquanto o fato financeiro existir. |
-| READ COMMITTED com `FOR NO KEY UPDATE` em ordem fixa | `NO KEY UPDATE` serializa saldo e estado sem bloquear a checagem das chaves estrangeiras de quem insere uma operação para a mesma conta, o que `FOR UPDATE` bloquearia. Em READ COMMITTED, o `SELECT` feito depois do `ON CONFLICT` enxerga o vencedor recém-confirmado. | Todo caminho de escrita precisa seguir a ordem cliente, depois contas por id. |
-| Instante lido com `clock_timestamp()` depois dos locks | `now()` é o início da transação e ficaria anterior a uma espera longa por lock; a janela do Pix e o extrato usam o instante em que a regra foi de fato avaliada. | Uma leitura extra do relógio por escrita. |
-| Estado atual, eventos e versão na conta | O estado responde às consultas, os eventos explicam cada mudança e a versão separa um comando antigo de uma decisão nova. | O integrador precisa enviar a versão que leu. |
-| Quota Pix somada dos lançamentos confirmados | Sem contador separado não existe um segundo número para reconciliar com o histórico. | Uma soma por Pix, feita sob o lock do cliente. |
+Tarifas e quotas são configuração da demonstração, mas a tarifa gravada numa operação é fato
+histórico e não muda. Serviços externos não participam do rollback do PostgreSQL: o bureau só
+informa a situação cadastral. Pagamentos externos pediriam rever confirmação, recuperação e
+reconciliação numa nova RFC.
 
 ## Implementação
 
@@ -247,7 +242,7 @@ erDiagram
 
 ### Fluxos
 
-**Cadastro de cliente — caminho feliz**
+**Cadastro de cliente: caminho feliz**
 
 ```mermaid
 sequenceDiagram
@@ -273,7 +268,7 @@ sequenceDiagram
 2. `INSERT ... ON CONFLICT DO NOTHING RETURNING` do cliente, com o pedido normalizado guardado em
    `creation_request`, e COMMIT. A API responde `201` com `customer_key`.
 
-**Cadastro de cliente — falha: o INSERT não devolve linha**
+**Cadastro de cliente, falha: o INSERT não devolve linha**
 
 1. Outra linha já ocupa a chave de idempotência ou o par tipo e documento. Um `SELECT` separado
    procura o cadastro daquela chave.
@@ -281,7 +276,7 @@ sequenceDiagram
 3. Achou com o mesmo pedido normalizado: é reenvio, e a API devolve `201` com a `customer_key`
    original. Achou com pedido diferente: `409` QIT001012. Nos dois casos a transação é desfeita.
 
-**Abertura de conta — caminho feliz e falha: bureau indisponível**
+**Abertura de conta: caminho feliz e falha com o bureau indisponível**
 
 ```mermaid
 sequenceDiagram
@@ -319,7 +314,7 @@ sequenceDiagram
    nada muda no banco: a conta existente é reaproveitada no reenvio, e sem reenvio ela continua
    PENDING, porque não há fila nem worker.
 
-**Estados da conta e bloqueio — caminho feliz**
+**Estados da conta e bloqueio: caminho feliz**
 
 ```mermaid
 stateDiagram-v2
@@ -346,7 +341,7 @@ stateDiagram-v2
 3. Versão atual igual à esperada mais um, com o último evento feito pelo integrador e de mesmo
    destino e motivo: é o reenvio da última transição, que devolve o mesmo resultado.
 
-**Bloqueio de conta — falha: versão obsoleta**
+**Bloqueio de conta, falha: versão obsoleta**
 
 ```mermaid
 flowchart LR
@@ -371,7 +366,7 @@ flowchart LR
    transferência relê BLOCKED e recusa com `409` QIT001029; se o débito confirma primeiro, ele vale,
    e o bloqueio passa a valer para as operações seguintes.
 
-**Transferência — caminho feliz**
+**Transferência: caminho feliz**
 
 ```mermaid
 sequenceDiagram
@@ -410,7 +405,13 @@ sequenceDiagram
 6. Um único `COMMIT` confirma operação, lançamentos e saldos; só então a API responde `201` com
    `operation_key`. O aporte segue o mesmo caminho, sem origem nem tarifa.
 
-**Transferência — falha: dois débitos concorrentes sem saldo para ambos**
+**Aporte, falha: sandbox desligado**
+
+1. A reserva da chave vem antes da checagem do sandbox. O reenvio de um aporte já confirmado
+   devolve `201` com a operação original, e a mesma chave com outro valor devolve `409` QIT001012.
+2. Só o aporte novo chega à checagem: `403` QIT001035 e rollback, sem lançamento nem saldo.
+
+**Transferência, falha: dois débitos concorrentes sem saldo para ambos**
 
 ```mermaid
 sequenceDiagram
@@ -437,7 +438,7 @@ sequenceDiagram
 3. A recusa desfaz a transação inteira, inclusive a reserva: não sobra operação nem lançamento, e
    a mesma chave pode ser reavaliada depois, quando houver saldo.
 
-**Transferência — falha: confirmação do COMMIT perdida**
+**Transferência, falha: confirmação do COMMIT perdida**
 
 ```mermaid
 sequenceDiagram
@@ -469,7 +470,7 @@ sequenceDiagram
    que a conta tenha sido bloqueada depois. Se o COMMIT não tinha acontecido, o reenvio executa a
    transferência pela primeira vez.
 
-**Pix simulado — falha: quota da janela esgotada**
+**Pix simulado, falha: quota da janela esgotada**
 
 ```mermaid
 sequenceDiagram
@@ -495,13 +496,7 @@ sequenceDiagram
 3. O consumo é a soma dos débitos de principal já confirmados na janela. Se ele mais o valor
    pedido passa da quota, `409` QIT001032 e rollback. Tarifa, recebimento e INTERNAL não consomem.
 
-**Aporte — falha: sandbox desligado**
-
-1. A reserva da chave vem antes da checagem do sandbox. O reenvio de um aporte já confirmado
-   devolve `201` com a operação original, e a mesma chave com outro valor devolve `409` QIT001012.
-2. Só o aporte novo chega à checagem: `403` QIT001035 e rollback, sem lançamento nem saldo.
-
-**Extrato — caminho feliz e falha: cursor inválido**
+**Extrato: caminho feliz e falha com cursor inválido**
 
 ```mermaid
 sequenceDiagram
@@ -525,7 +520,7 @@ sequenceDiagram
 4. Cursor malformado, de outra conta ou fora do intervalo de datas recebe `400` QIT001033, com a
    mesma resposta nos três casos, para não revelar de quem ele é.
 
-**Detalhe da operação — caminho feliz e falha: operação sem lançamento na conta**
+**Detalhe da operação: caminho feliz e falha com operação sem lançamento na conta**
 
 1. Autorizar a conta do caminho e buscar os lançamentos da operação só naquela conta, em ordem
    crescente. A resposta traz `operation_key`, `type`, `modality`, `created_at` e as `entries`.

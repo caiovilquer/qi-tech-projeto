@@ -1,7 +1,7 @@
 # Especificação detalhada: protótipo bancário com saldo e extrato consistentes
 
 **Bootcamp QI Tech · Projeto bancário · complemento da RFC v8 · 12/10/2026**  
-A [RFC v8](RFC-v8.md) apresenta o desenho no modelo do bootcamp, em dez páginas, com os diagramas dos fluxos. Este
+A [RFC v8](RFC-v8.md) apresenta o desenho no modelo do bootcamp, com os diagramas dos fluxos e as decisões. Este
 documento detalha as regras, os dicionários de dados, o catálogo de erros, a estratégia de testes e
 a operação que não cabem nela; o diagrama do modelo e o principal desafio ficam na RFC.
 

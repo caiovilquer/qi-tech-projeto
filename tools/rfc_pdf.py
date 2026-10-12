@@ -44,6 +44,8 @@ table.meta { width: auto; font-size: 8.6pt; }
 table.meta td:first-child { padding-right: 10pt; }
 table.routes th:nth-child(1) { width: 6%; } table.routes th:nth-child(2) { width: 17%; }
 table.routes th:nth-child(3) { width: 23%; } table.routes th:nth-child(4) { width: 18%; }
+table.wide4 th:nth-child(1) { width: 14%; } table.wide4 th:nth-child(2) { width: 28%; }
+table.wide4 th:nth-child(3) { width: 37%; }
 code { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 0.9em; background: #f1f5f2; padding: 0 1.5pt; border-radius: 2px; }
 td code { overflow-wrap: normal; word-break: keep-all; }
 pre { margin: 3pt 0 6pt; padding: 5pt 7pt; background: #f1f5f2; border: 1px solid #c9d8cf; border-radius: 3px;
@@ -53,7 +55,7 @@ blockquote { margin: 6pt 0 0; padding: 4pt 9pt; background: #eef5f0; border-left
 blockquote ul { margin-left: 12pt; }
 img { display: block; width: 72%; margin: 3pt auto 5pt; }
 .mermaid { display: flex; justify-content: center; margin: 2pt 0 4pt; break-inside: avoid; }
-.mermaid svg { max-width: 100% !important; max-height: 168mm; height: auto; }
+.mermaid svg { max-width: 100% !important; max-height: 150mm; height: auto; }
 """
 
 SCRIPT = r"""
@@ -64,6 +66,8 @@ for (const table of doc.querySelectorAll('table')) {
   const head = table.querySelector('thead');
   if (head && [...head.querySelectorAll('th')].every(th => !th.textContent.trim())) {
     head.remove(); table.classList.add('meta');
+  } else if (head && head.querySelectorAll('th').length === 4) {
+    table.classList.add('wide4');
   }
 }
 const routes = [...doc.querySelectorAll('h3')].find(h => h.textContent.trim() === 'Rotas');
@@ -74,7 +78,7 @@ for (const code of doc.querySelectorAll('td code')) {
   if (code.textContent.startsWith('/')) code.innerHTML = code.textContent.split('/').map(escape).join('/<wbr>');
 }
 mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral',
-  sequence: { mirrorActors: false, messageMargin: 26, height: 40, boxMargin: 6, noteMargin: 6 } });
+  sequence: { mirrorActors: false, messageMargin: 22, height: 36, boxMargin: 6, noteMargin: 6 } });
 (async () => {
   let index = 0;
   for (const block of [...doc.querySelectorAll('pre > code.language-mermaid')]) {
