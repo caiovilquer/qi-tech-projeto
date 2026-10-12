@@ -1,445 +1,553 @@
-# RFC: protótipo bancário com saldo e extrato consistentes
-
-**Bootcamp QI Tech · Projeto bancário · Versão 8 · 11/10/2026**  
-Especificação técnica final para submissão. Decisões de projeto aprovadas.
-
-## 1. Contexto, problema e objetivos
-
-Protótipo bancário do bootcamp QI Tech para cadastrar PF/PJ, abrir contas, receber aportes de sandbox, transferir valores com tarifas e consultar saldo/extrato. O problema central é preservar dinheiro e histórico diante de concorrência, repetição e perda de resposta: um único commit confirma operação, lançamentos e saldos, sem débito parcial, duplicado ou negativo.
-
-**Escopo:** integrador confiável, titular único com múltiplas contas, BRL, bureau mockado, estados de conta, transferências internas e Pix simulado, tarifas e quota por cliente. As funcionalidades centrais e a entrega Linux/Compose/pytest seguem o curso; os detalhamentos são decisões aprovadas da equipe.
-
-**Limites:** dados fictícios; sem liquidação externa, SPI/DICT, chaves Pix reais, crédito, conta conjunta, estorno, encerramento, câmbio, frontend bancário, login próprio ou múltiplos integradores. O histórico deve reconstruir saldos e restringir consultas ao titular. O desenho não constitui contabilidade institucional completa nem comprova conformidade com Pix real. Os testes descritos são critérios para a implementação.
-
-## 2. Arquitetura e responsabilidades
-
-![Integrador e testes HTTP acessam a API. API e instância de teste usam PostgreSQL; MockServer representa o bureau.](assets/ecossistema.svg)
-
-Monólito modular: Python 3.11, FastAPI, SQLAlchemy 2.0, psycopg2 e PostgreSQL 16, com versões fixadas conforme a base e handlers síncronos. Cliente, conta, tarifa e lançamentos compartilham uma fronteira de commit; microsserviços acrescentariam coordenação distribuída sem necessidade de autonomia neste escopo.
-
-**Camadas:** resource/schema adapta HTTP e valida formato, sem SQL de negócio; controller autoriza, aplica regras e controla locks/commit/rollback; repository/model consulta e escreve as cinco entidades, sem commit próprio; DTO limita a saída; middleware cuida do contexto, request_id, logs e encerramento da sessão; connector encapsula transporte/timeout do bureau, cuja decisão cabe ao controller.
-
-Módulos customers, accounts, operations, status e health usam resources/, schemas/, controllers/, repositories/, models/, dtos/, connectors/ e middlewares/; testes em tests/ e schema em database.sql. api-fee0 é a mesma imagem com tarifas zeradas para testes; MockServer simula o externo. Sem fila ou worker: abertura pendente é retomada pelo consumidor.
-
-## 3. Clientes, identidade e autorização
-
-### Cadastro PF/PJ e documentos
-
-Cada cliente possui customer_key UUID, customer_type PF ou PJ, nome civil/razão social não vazio até 120 caracteres, document_number textual e email opcional até 254 caracteres. Nome é aparado nas extremidades; email omitido e null têm a mesma representação. O pedido normalizado é preservado para comparação idempotente; não há edição cadastral nesta versão.
-
-CPF possui 11 dígitos; CNPJ possui 14 posições, aceitando o formato numérico e o alfanumérico. A normalização remove somente a pontuação admitida, preserva zeros e converte letras do CNPJ para maiúsculas. O validador confere formato e dígitos verificadores segundo o algoritmo aplicável, sem transformar documento em inteiro. CNPJ alfanumérico tem letras/números nas primeiras 12 posições e dois verificadores numéricos ([Receita Federal](https://www.gov.br/receitafederal/pt-br/acesso-a-informacao/acoes-e-programas/programas-e-atividades/cnpj-alfanumerico)).
-
-O par (customer_type, document_number) é único. Um mesmo cliente pode ter várias contas; cada conta pertence a exatamente um titular. Essa escolha permite exercitar autorização e limites compartilhados sem implementar conta conjunta. Incluir PF/PJ exige testes de ambos os validadores e das quatro combinações de tarifa, mantendo o restante do modelo comum.
-
-### Fronteira de confiança
-
-O protótipo reconhece um único integrador de backend por INTERNAL-TOKEN. Após o cadastro, esse integrador envia CUSTOMER-KEY como contexto de cliente. A identidade fixa do integrador vem da configuração associada ao token, nunca de um identificador livre enviado no corpo. CUSTOMER-KEY é uma declaração autenticada do integrador; um UUID conhecido isoladamente não autentica ninguém.
-
-O integrador autentica seus usuários, verifica a representação de empresas e restringe o acesso às ações administrativas. A API confere, a cada pedido, cliente–conta e conta–operação. Essa divisão evita duplicar o ciclo de login/credencial pessoal; não haverá CUSTOMER-TOKEN, emissão de segredo por cliente nem access_token_hash no cadastro.
-
-A consequência é explícita: comprometer o integrador permite declarar identidades sob sua confiança. INTERNAL-TOKEN fica somente no backend, fora de navegador, repositório e logs. Comunicação publicada usa HTTPS. O monitoramento possui MONITORING-TOKEN separado, aceito apenas na readiness e incapaz de autorizar operações financeiras.
-
-### Isolamento nas consultas e nos comandos
-
-- Cadastro inicial exige INTERNAL-TOKEN e Idempotency-Key, sem CUSTOMER-KEY de um cliente que ainda não existe.
-- Nas demais rotas de negócio, o contexto é obrigatório. UUID de cliente na rota ou corpo deve coincidir com o contexto autenticado.
-- Conta inexistente e conta de outro titular retornam o mesmo 404. O detalhe exige também que exista lançamento da operação naquela conta.
-- O destinatário pode consultar seu próprio crédito mesmo sem ter solicitado a operação. A resposta exclui tarifa, saldo e lançamentos da contraparte.
-- Destino de transferência pode pertencer a outro cliente. Resolver o destino não autoriza divulgar seu cadastro ou estado detalhado.
-
-**Alternativa descartada:** token pessoal por correntista acrescentaria emissão, entrega única, recuperação e rotação. Com um integrador já responsável pela identidade, esse ciclo criaria novos riscos sem retirar a confiança nele. Autenticação direta de usuários e múltiplos parceiros exigiriam revisão dessa fronteira.
-
-## 4. Criação idempotente e bureau simulado
-
-POST /customers e POST /accounts exigem Idempotency-Key UUID. A unicidade é por integrador e comando: customer e account mantêm separadamente UNIQUE(creation_integrator, creation_idempotency_key). Cada recurso guarda o pedido original normalizado em creation_request. A chave acompanha o recurso; não há expiração automática ou necessidade de cache externo de respostas.
-
-### Cadastro e recuperação
-
-O cadastro valida CPF/CNPJ e arbitra a chave no banco. Mesmo pedido e chave devolvem o customer_key original; mesma chave e pedido válido diferente retornam 409. Uma chave nova com documento já cadastrado também retorna 409, sem criar outro cliente. Como o sucesso devolve somente o identificador, não há segredo a reemitir quando a resposta se perde.
-
-### Abertura: caminho completo
-
-1. Autenticar o integrador, autorizar o cliente e normalizar o pedido. Arbitrar a chave de criação. Se já existe conta para a chave, comparar o pedido; conflito retorna 409.
-2. Na primeira execução, persistir conta com saldo zero, PENDING e status_version=1, junto do evento inicial e metadados de criação. Confirmar essa transação curta.
-3. Encerrar transação e sessão de banco antes do HTTP. Se a abertura já foi concluída, recuperar seu resultado original sem consultar o bureau novamente.
-4. Para a conta ainda PENDING, o connector consulta o documento no MockServer, com conexão de 3 s e leitura de 5 s, sem retry interno. O contrato distingue REGULAR, IRREGULAR, NOT_FOUND e falha técnica; inadimplência é indicador separado.
-5. Abrir nova transação, obter FOR NO KEY UPDATE da conta e reler estado. Somente PENDING pode receber a conclusão. REGULAR produz ACTIVE; IRREGULAR/NOT_FOUND produz REJECTED. Gravar estado, versão, evento e evidência mínima no mesmo commit.
-6. Se outro concorrente já concluiu, descartar a resposta tardia e devolver o resultado persistido. Se o connector falhou, também reconsultar o estado sob coordenação antes de informar pendência; uma conclusão concorrente prevalece.
-7. Após commit confirmado, aprovação retorna 201 com account_key e opening_result=APPROVED. Recusa retorna 422/QIT001030 com details.account_key próprio. Falha técnica, permanecendo PENDING, retorna 503/QIT001031.
-
-Guardar somente classificação/motivo, referência, instante e indicador de inadimplência necessários para explicar a decisão. Documento matematicamente válido, situação cadastral, identidade do usuário e titularidade externa são verificações diferentes. A consulta simulada não autentica pessoas nem verifica uma conta em outra instituição.
-
-### Motivação e consequência
-
-Escolhemos bureau simulado para demonstrar connector, contrato externo e falhas determinísticas sem contratar um serviço real ou usar dados pessoais. Inadimplência é informativa, pois o produto não oferece crédito. Recusar cadastro por dívida acrescentaria uma regra sem fundamento no escopo.
-
-A pendência é estado do recurso, não uma operação financeira incompleta. Reenviar o mesmo POST/chave retoma a análise; GET apenas consulta. Sem reenvio, a conta pode continuar PENDING. Aceitamos esse limite para evitar fila e worker. Duas chamadas externas de leitura podem acontecer em paralelo; apenas uma conclusão local é aplicada. Commit de qualquer etapa sem confirmação confiável exige recuperar pela mesma chave.
-
-## 5. Estados e concorrência administrativa
-
-| Estado | Uso permitido | Transições |
-| --- | --- | --- |
-| PENDING | Consultar; saldo zero; abertura em análise. | ACTIVE ou REJECTED por avaliação cadastral. |
-| ACTIVE | Consultar, receber crédito e debitar, respeitando as regras financeiras. | BLOCKED por comando administrativo. |
-| REJECTED | Consultar o registro da abertura recusada; saldo zero. | Terminal para esta solicitação. |
-| BLOCKED | Consultar e receber créditos; novos débitos recusados. | ACTIVE por comando administrativo. |
-
-A conta começa em PENDING, acompanhada do evento inicial. Saldo insuficiente recusa somente a movimentação: não bloqueia conta nem cria evento de estado. O bloqueio representa uma restrição administrativa de saída; receber crédito pode ajudar a recompor saldo e não contraria essa restrição. Aporte próprio é um crédito e segue a mesma regra, se o sandbox estiver habilitado.
-
-### Comando de bloqueio e desbloqueio
-
-PUT /accounts/{account_key}/status exige INTERNAL-TOKEN, CUSTOMER-KEY, status ACTIVE ou BLOCKED, reason não vazio até 240 caracteres e expected_version inteiro positivo. O integrador limita quem pode emitir o comando em sua plataforma; a API verifica titularidade e protege a concorrência. Não há rota para forçar a aprovação de PENDING nem reabrir REJECTED.
-
-1. Bloquear a linha da conta com FOR NO KEY UPDATE e reler estado/status_version. Validar que o estado atual permite a ação.
-2. Se expected_version corresponde à versão atual e há mudança de estado, incrementar a versão e inserir account_status_event com anterior, novo, motivo, ator e instante. Confirmar os dois efeitos juntos.
-3. Se o estado já é o solicitado e a versão esperada é a atual, retornar sucesso sem novo evento.
-4. Um reenvio da última transição é reconhecido se a versão atual é expected_version+1 e o último evento possui o mesmo destino e motivo. Retornar o resultado sem duplicar histórico.
-5. Qualquer outra versão obsoleta retorna 409/QIT001034, sem mudar estado. Um bloqueio antigo não pode reaplicar-se após um desbloqueio posterior.
-
-### O que acontece quando bloqueio e débito concorrem
-
-Ambos coordenam pela mesma linha da conta. Se o bloqueio confirma primeiro, a movimentação relê BLOCKED e recusa o novo débito. Se a movimentação adquire o lock e confirma primeiro, o débito é válido no estado que observou; o bloqueio passa a valer para operações posteriores. Não existe garantia de prioridade pela ordem de chegada das requisições HTTP.
-
-Replay financeiro já confirmado continua retornando o resultado original mesmo depois de um bloqueio. Essa resposta não executa um débito novo. De modo semelhante, replay da abertura recupera o resultado imutável do evento que saiu de PENDING; não usa BLOCKED como se fosse recusa da abertura. GET /accounts/{account_key} fornece o estado atual.
-
-**Por que versionar:** somente conferir o estado desejado evita algumas duplicações, mas não distingue uma tentativa antiga de uma decisão nova após mudanças intermediárias. A versão oferece essa distinção com um campo e o histórico já necessário, sem tabela genérica de comandos ou coordenação externa.
-
-## 6. Dinheiro, tarifas e limite Pix
-
-Toda conta inicia em zero. Aporte próprio simulado fornece o saldo de demonstração somente em sandbox explicitamente habilitado; a conta deve ser do cliente autenticado. Para enviar a terceiros, o consumidor usa transferência. Não há lastro externo verificado nem depósito por pessoa não autorizada.
-
-| Modalidade | PF | PJ |
-| --- | --- | --- |
-| INTERNAL | 200 (R$ 2,00) | 500 (R$ 5,00) |
-| PIX_SIMULATED | 0 | 100 (R$ 1,00) |
-| Aporte próprio de sandbox | 0 | 0 |
-
-A tarifa depende do tipo do titular da origem e da modalidade, é calculada pelo servidor e fica persistida em operation.fee_cents. Principal e tarifa precisam caber no saldo disponível. O destinatário recebe apenas o principal. Tarifa zero não cria entry de delta zero. Configurações são validadas no startup; alterações afetam somente novas operações. Replay mantém a tarifa registrada, inclusive quando atendido por api-fee0.
-
-### Representação e teto
-
-Valores usam BIGINT em centavos de BRL. Principal varia de 1 a 2^53−1; saldos e tarifas, de zero a esse teto. JSON monetário aceita apenas inteiros, rejeitando strings, booleanos e floats antes de qualquer conversão. O teto atende consumidores que usam números JSON/JavaScript ([RFC 8259, §6](https://www.rfc-editor.org/rfc/rfc8259#section-6)). Calcular principal+tarifa sem overflow e conferir o crédito contra o teto do destino.
-
-Inteiros evitam erro binário de ponto flutuante e dispensam política de arredondamento nesta escala fixa. NUMERIC/Decimal seria adequado a juros, câmbio ou escalas variáveis, que estão fora do recorte. O teto de representação não é uma estimativa de volume financeiro do sistema.
-
-### Pix local e quota acumulada
-
-| Janela em America/Sao_Paulo | Principal enviado por cliente |
-| --- | --- |
-| 06:00 inclusive até 20:00 exclusive | 1.000.000 centavos (R$ 10.000,00) |
-| 20:00 inclusive até 06:00 do dia seguinte exclusive | 100.000 centavos (R$ 1.000,00) |
-
-PIX_SIMULATED é transferência entre contas existentes no mesmo banco, identificada por modality. Reutiliza locks, lançamentos e commit de INTERNAL. Não consulta chave Pix real nem produz efeito em outra instituição. Diferenciar modalidade permite demonstrar regras próprias sem distribuir a escrita financeira.
-
-O limite é por cliente PF/PJ e soma todas as suas contas, inclusive Pix entre contas distintas do próprio titular. Só o principal enviado consome quota; tarifa exige saldo, mas não quota. Recebimentos não recompõem quota e INTERNAL não a consome. Não há teto adicional por operação além de saldo, representação e quota disponível.
-
-O período noturno atravessa a meia-noite: uma operação às 01:00 pertence à janela iniciada às 20:00 do dia anterior. Usar America/Sao_Paulo para obter as bordas locais e convertê-las a UTC. O instante financeiro é obtido no servidor após os locks. Quota é a soma dos débitos principais confirmados nessa janela; recusa, tarifa, crédito e replay não geram consumo adicional.
-
-## 7. Modelo de dados e relações
-
-![Cinco entidades: customer, account, operation, account_entry e account_status_event, com chaves e cardinalidades.](assets/modelo-rfc.svg)
-
-O modelo separa identidade, estado operacional, intenção financeira confirmada e efeito no saldo. customer possui 0..N contas e solicita 0..N operações. account possui um titular, 1..N eventos de estado e 0..N lançamentos. operation possui um destino e origem apenas em transferência; cada lançamento pertence a uma conta e a uma operação.
-
-Uma operação de aporte produz um lançamento; transferência sem tarifa produz dois; com tarifa positiva, três. A origem pode observar principal e tarifa, e o destino apenas seu crédito. Essa quantidade e a correspondência de valores são regras transacionais, não consequência automática das FKs.
-
-IDs BIGINT servem ao banco e à ordenação. UUIDs públicos identificam recursos nos contratos sem expor a sequência interna. UUID não substitui autorização. Todas as FKs usam ON DELETE RESTRICT; não há DELETE de negócio. Instantes persistidos são TIMESTAMPTZ, serializados em UTC.
-
-**Por que saldo materializado e lançamentos:** ler saldo direto simplifica as consultas; o histórico permite explicar e reconciliar cada alteração. Somar todo o histórico em cada consulta reduziria uma redundância, mas aumentaria custo e não eliminaria a necessidade de coordenar débitos. O preço da escolha é obrigar toda escrita a atualizar saldo e histórico na mesma transação.
-
-## 8. Dicionário: cliente, conta e estados
-
-### customer
-
-| Atributo | Regra |
-| --- | --- |
-| id / customer_key | BIGINT interno / UUID público UNIQUE |
-| customer_type / document_number | PF ou PJ; VARCHAR(14) normalizado; UNIQUE(tipo, documento) |
-| name / email | Nome civil ou razão social até 120; email opcional até 254 |
-| creation_integrator / creation_idempotency_key | Identidade do integrador autenticado; UUID. UNIQUE(integrador, chave) nesta tabela. |
-| creation_request | JSONB imutável com tipo, documento, nome e email normalizados para comparar o cadastro; sem credenciais. |
-| created_at | TIMESTAMPTZ; não há access_token_hash |
-
-### account
-
-| Atributo | Regra |
-| --- | --- |
-| id / account_key / customer_id | BIGINT / UUID UNIQUE / FK customer NOT NULL |
-| balance_cents | BIGINT entre 0 e 2^53−1; PENDING/REJECTED exigem zero |
-| status / status_version | PENDING, ACTIVE, REJECTED ou BLOCKED; versão inteira positiva inicia em 1 |
-| creation_integrator / creation_idempotency_key | UNIQUE(integrador, chave) nesta tabela; namespace distinto do cadastro de cliente |
-| creation_request / created_at | JSONB imutável com customer_key normalizado; TIMESTAMPTZ de criação |
-
-### account_status_event
-
-| Atributo | Regra |
-| --- | --- |
-| id / event_key / account_id | BIGINT / UUID UNIQUE / FK account |
-| version / previous_status / new_status | UNIQUE(account_id, version); previous_status NULL somente na criação; versão nova coincide com account.status_version |
-| reason / actor / created_at | Motivo até 240; integrador ou avaliação cadastral; instante da mudança |
-| bureau_reference / bureau_checked_at / has_debt | Opcionais, presentes somente na conclusão cadastral; motivo distingue REGULAR, IRREGULAR e NOT_FOUND. Sem resposta bruta. |
-
-Apenas campos explicitamente opcionais admitem NULL. creation_request contém entradas de negócio normalizadas, nunca credenciais. Ator administrativo identifica o integrador; ator cadastral identifica o fluxo de avaliação. O motivo de conclusão distingue REGULAR, IRREGULAR e NOT_FOUND. Evidências externas ficam no evento de conclusão; o estado atual continua em account.
-
-Não é necessário duplicar opening_result em account: a transição imutável de PENDING determina aprovação/recusa inicial. A versão do evento coincide com status_version aplicado; a criação gera versão 1, com previous_status NULL. A leitura do último evento explica o estado atual.
-
-## 9. Dicionário financeiro e integridade
-
-### operation
-
-| Atributo | Regra |
-| --- | --- |
-| id / operation_key / customer_id | BIGINT / UUID UNIQUE / FK cliente autor |
-| type / modality | DEPOSIT com modality NULL; TRANSFER com INTERNAL ou PIX_SIMULATED |
-| origin_account_id / destination_account_id | FK origem NULL somente em aporte; destino obrigatório. Na transferência, contas distintas. |
-| amount_cents / fee_cents | BIGINT: principal 1..2^53−1, tarifa 0..2^53−1; depósito com tarifa zero |
-| idempotency_key / created_at | UUID; UNIQUE(customer_id, idempotency_key); TIMESTAMPTZ pós-lock. Valores e modalidade imutáveis no commit. |
-
-### account_entry
-
-| Atributo | Regra |
-| --- | --- |
-| id / entry_key / operation_id / account_id | BIGINT / UUID UNIQUE / FKs obrigatórias |
-| role / delta_cents | DEPOSIT_CREDIT e TRANSFER_CREDIT positivos; TRANSFER_DEBIT e FEE_DEBIT negativos; delta nunca zero |
-| balance_after_cents / created_at | Saldo retornado por UPDATE; instante único da operação |
-| UNIQUE(operation_id, role) | 1 entry no aporte; 2 na transferência sem tarifa ou 3 com tarifa. IDs sequenciais CACHE 1 obtidos sob lock. |
-
-operation.customer_id identifica o solicitante: titular da origem na transferência e do destino no aporte. A identidade do destinatário não substitui a do solicitante.
-
-### Invariantes que devem permanecer verdadeiras
-
-- Saldo atual da conta = soma de todos os seus delta_cents confirmados. Em cada entry, balance_after_cents corresponde ao saldo após aquele delta.
-- Para cada transferência: débito principal = −amount_cents; crédito de destino = amount_cents; tarifa, quando positiva, = −fee_cents na origem.
-- Soma de todos os saldos + tarifas confirmadas = aportes confirmados. A tarifa é saída deste sublivro; não há conta institucional de receitas nesta versão.
-- PENDING e REJECTED sempre têm saldo zero. Estado e evento/versionamento mudam juntos; nenhum lançamento existe para uma operação financeira recusada.
-
-PK, UUIDs únicos, FKs, NOT NULL e CHECKs protegem tipo/modalidade, sinal por role, valores e tetos locais. UNIQUE(operation_id, role) evita duplicar um papel na mesma operação. CHECKs não comprovam somas entre tabelas: controller e testes devem garantir quantidade, contas corretas e igualdade entre principal, tarifa e deltas.
-
-Índices iniciais: account(customer_id,id), account_entry(account_id,id DESC), operation(customer_id,modality,created_at), além de índices únicos e das referências usadas nos joins. Revisar planos no volume de teste antes de acrescentar índices. Não há tabela de quota nem cache de saldo: dados financeiros confirmados são a fonte do consumo.
-
-## 10. Escrita monetária: ordem obrigatória
-
-![Autorização antes da reserva; conflito recupera replay; Pix novo trava cliente e depois contas; commit reúne todos os efeitos.](assets/sequencia.svg)
-
-1. **Entrada e acesso.** Validar schema estrito, autenticar integrador/contexto e autorizar conta da rota. Resolver o destino; recusar origem igual ao destino. Estado e saldo não são usados para rejeitar um replay já confirmado.
-2. **Reserva imediata.** Na mesma transação financeira, executar INSERT de operation com ON CONFLICT (customer_id,idempotency_key) DO NOTHING RETURNING. Registrar tipo, modalidade, contas, valor e tarifa inicial. session.add() sem flush não arbitra a chave.
-3. **Conflito.** Após eventual espera, fazer SELECT separado em READ COMMITTED. Comparar tipo, modalidade, origem, destino e valor. Igual recupera operation_key/201; diferente retorna 409. Se a tentativa concorrente abortou, o INSERT pode prosseguir.
-4. **Operação nova.** Para Pix, coordenar primeiro a linha do cliente de origem; depois travar todas as contas por ID crescente com FOR NO KEY UPDATE. Reler saldos e estados frescos.
-5. **Regras e instante.** Obter clock_timestamp() uma vez após todos os locks e atualizar o instante provisório da reserva. Conferir estados, principal+tarifa, teto do destino e quota Pix.
-6. **Efeitos.** UPDATE relativo + RETURNING para cada delta; conferir o saldo retornado e inserir entry correspondente. Na origem, principal antes da tarifa; destino recebe principal. IDs nascem nos INSERTs sob lock.
-7. **Conclusão.** Flush explícito, montar DTO simples e confirmar um único COMMIT. Responder 201 apenas depois da confirmação. Não reler ORM expirado para construir a resposta nem deixar saldo absoluto antigo sobrescrever a escrita relativa.
-
-**Principal desafio**
-
-A garantia depende da combinação e da ordem dos mecanismos: unicidade arbitra repetição; locks coordenam regras; atualização relativa e lançamentos no mesmo commit preservam dinheiro. Aplicar apenas um desses mecanismos não protege todos os cenários.
-
-## 11. Concorrência, locks e ordenação
-
-### Saldo e quota sob a mesma coordenação
-
-Dois débitos com chaves diferentes podem ser válidos isoladamente e exceder o saldo em conjunto. Por isso, a decisão usa valores relidos após o lock. Em Pix, duas contas do mesmo cliente também podem competir pela mesma quota: a linha do cliente é coordenada antes das contas. O segundo pedido só apura consumo depois que o primeiro termina. A reserva atual ainda não tem entries e não entra na soma.
-
-Todos os caminhos que precisam de cliente e contas seguem cliente antes de contas; contas sempre em ID crescente, inclusive quando o sentido econômico da transferência é inverso. Aporte trava só o destino; comando de estado trava só sua conta; INTERNAL trava origem/destino. Nenhum desses caminhos adquire depois um lock de cliente que viole a ordem.
-
-### Por que FOR NO KEY UPDATE e READ COMMITTED
-
-A reserva possui FKs para cliente e contas. A verificação dessas referências pode adquirir KEY SHARE. FOR NO KEY UPDATE é compatível com esse modo e ainda serializa as atualizações de saldo/estado que não alteram chaves. Trocar isoladamente por FOR UPDATE introduziria conflitos desnecessários entre referências e bloqueios de linhas ([PostgreSQL: locks](https://www.postgresql.org/docs/16/explicit-locking.html)). Não atualizamos PKs ou chaves referenciadas.
-
-READ COMMITTED fornece um novo snapshot por comando. Por isso, após ON CONFLICT aguardar uma transação concorrente, o SELECT separado pode recuperar o resultado que acabou de confirmar. Não concentrar arbitragem e leitura de fallback no mesmo snapshot de uma única expressão ([PostgreSQL: isolamento](https://www.postgresql.org/docs/16/transaction-iso.html)). A unicidade continua sendo a autoridade; consultar antes e inserir depois deixa uma janela de corrida.
-
-SERIALIZABLE foi considerado, mas adicionaria abortos de serialização e tratamento de reexecução em mais caminhos. Para os recursos conhecidos desta versão, locks explícitos e ordem uniforme tornam o raciocínio e os testes mais diretos. Isso não autoriza escrituras fora do protocolo nem promete ausência de deadlocks em qualquer SQL futuro.
-
-### Leitura fresca, IDs e tempo
-
-A identidade de uma entidade no cache ORM não garante que seus atributos reflitam o banco após esperar um lock. Usar projeções frescas ou populate_existing. O saldo é atualizado com delta relativo e RETURNING; não manter uma alteração absoluta pendente no objeto ORM. O valor retornado alimenta balance_after_cents.
-
-IDs de entries são atribuídos pelo INSERT enquanto os locks estão mantidos, com sequência CACHE 1 e sem pré-alocação. Isso permite ordenar os lançamentos de uma conta; não promete ordem global de commit entre contas independentes. Lacunas por rollback são normais e não representam lançamentos ausentes ([PostgreSQL: sequências](https://www.postgresql.org/docs/16/sql-createsequence.html)).
-
-Todos os lançamentos de uma operação recebem o mesmo instante financeiro obtido após os locks. now() representa o início da transação e pode ficar anterior a uma espera longa; clock_timestamp() fornece a leitura escolhida ([PostgreSQL: relógios](https://www.postgresql.org/docs/16/functions-datetime.html)). Timestamp não é chave de ordenação do extrato nem garantia de monotonicidade do relógio.
-
-### Exemplos de resultado
-
-Com saldo 10.000 e dois débitos de 7.000 mais tarifa, só um confirma; o outro relê o restante e recusa. Transferências A→B e B→A bloqueiam a menor conta primeiro. Dois Pix de 60.000 centavos em contas diferentes do mesmo cliente, na quota de 100.000, permitem apenas um. Bloqueio concorrente usa o mesmo lock de conta, conforme seção 5.
-
-## 12. Idempotência, falhas e recuperação
-
-A chave financeira UUID é única por cliente em todas as rotas monetárias e contas desse cliente. O tipo faz parte do pedido comparado: reutilizar a mesma chave de aporte em transferência conflita. A comparação inclui modalidade, contas e valor; tarifa não participa, pois é calculada e preservada pelo servidor. A autorização de acesso continua obrigatória em cada reenvio.
-
-| Situação | Efeito e resposta |
-| --- | --- |
-| Mesma chave e pedido já confirmado | 201 com a mesma operation_key; nenhum novo débito, crédito, tarifa ou consumo de quota. |
-| Mesma chave e pedido válido diferente | 409/QIT001012. A operação original permanece intacta. |
-| Recusa financeira antes do commit | Rollback de toda a tentativa, incluindo a reserva. Sem operação confirmada ou entry; chave pode ser reavaliada. |
-| Erro transitório comprovadamente pré-COMMIT | Rollback e 503/QIT001014 quando possível. Retry usa a mesma chave e conteúdo. |
-| COMMIT enviado ou possivelmente enviado, confirmação perdida | Resultado desconhecido; 503/QIT001027 quando possível, ou falha de transporte. Não presumir rollback. |
-| Abertura ainda PENDING | Reenvio do mesmo POST/chave pode consultar bureau e concluir. Não se aplica ao protocolo financeiro local. |
-
-Operação confirmada é fato financeiro imutável. Não existe operation FAILED nem estado monetário pendente confirmado entre etapas: recusas ficam nos logs de tentativa. Persistir uma reserva em transação independente exigiria recuperação de reservas abandonadas e criaria uma segunda fonte de estado, evitada neste desenho.
-
-### Confirmação perdida não é falha comprovada
-
-Se o banco confirmou e a resposta se perdeu, um rollback local posterior não desfaz esse commit. O consumidor deve reenviar a mesma chave e corpo: se houve confirmação, obtém replay; se não houve, a tentativa pode executar. Tampouco o rollback de uma requisição prova o resultado de outra concorrente com a mesma chave.
-
-A associação chave–operação é durável enquanto o fato financeiro existir. Um TTL de 24 horas permitiria que uma intenção antiga e ainda incerta fosse debitada novamente depois da expiração. Não há cache com expiração definindo a garantia. Recursos de criação seguem sua própria chave durável e o fluxo de abertura entre transações.
-
-### Política do consumidor
-
-Adotar até quatro reenvios após 0,5, 1, 2 e 4 segundos para timeout, falha de rede ou erro transitório classificado. Não repetir automaticamente 4xx definitivos. Esgotadas as tentativas, preservar a chave e registrar resultado desconhecido para recuperação posterior; nunca criar outra chave para a mesma intenção. O limite de retries é operacional, não prazo de retenção da chave.
-
-Uma tentativa recusada por saldo pode ser reavaliada depois que entrar saldo, pois não consumiu a chave. Isso difere de reapresentar uma operação já concluída: replay não recalcula tarifa nem exige o estado, saldo ou quota atuais. A intenção deve permanecer com o mesmo conteúdo durante a recuperação.
-
-### Exemplo auditável
-
-PF transfere 5.000 de um saldo de 10.000 via INTERNAL: principal deixa 5.000; tarifa 200 deixa 4.800; destino recebe 5.000. Reconciliação: 4.800 + 5.000 + 200 = 10.000. Replay na fee0 preserva essa cobrança; somente um pedido novo/chave nova pode usar tarifa zero.
-
-## 13. Contratos HTTP de negócio
-
-JSON estrito; campos desconhecidos recusados. UUIDs públicos identificam recursos. Todas as rotas abaixo exigem INTERNAL-TOKEN; exceto o cadastro inicial, exigem também CUSTOMER-KEY. POSTs de criação e monetários exigem Idempotency-Key UUID. Autorização, validação e falhas gerais seguem o catálogo da seção 14; a tabela destaca os resultados de domínio.
-
-| Método | Rota | Entrada principal | Sucesso | Recusas de domínio |
-| --- | --- | --- | --- | --- |
-| POST | /customers | customer_type, name, document_number; email opcional | 201: customer_key, inclusive replay | 422 documento inválido; 409 documento/chave |
-| GET | /customers/{customer_key} | Cliente da rota igual ao contexto | 200: cadastro próprio | 404 ausente/alheio |
-| POST | /accounts | customer_key igual ao contexto | 201: account_key, opening_result=APPROVED | 409 chave; 422 bureau; 503 pendente/incerto |
-| GET | /accounts | page 0..999999999; limit 1..100; padrões 0/10 | 200: data, page, limit, is_last_page | 400 paginação |
-| GET | /accounts/{account_key} | Conta própria | 200: conta, saldo, moeda, estado e versão | 404 ausente/alheia |
-| PUT | /accounts/{account_key}/status | status ACTIVE/BLOCKED, reason, expected_version | 200: account_key, status, status_version | 404 conta; 409 estado/versão |
-| POST | /accounts/{account_key}/deposits | amount_cents; sandbox habilitado | 201: operation_key | 403 sandbox; 404 conta; 409 estado/teto/chave |
-| POST | /accounts/{account_key}/transfers | destination_account_key, amount_cents, modality obrigatória | 201: operation_key | 404 conta/destino; 422 mesma conta; 409 saldo/estado/teto/quota/chave |
-| GET | /accounts/{account_key}/statement | cursor; limit 1..100, padrão 10; created_at_from/to | 200: data, limit, next_cursor, is_last_page | 404 conta; 400 cursor/intervalo |
-| GET | /accounts/{account_key}/transactions/{operation_key} | Operação vinculada à conta própria | 200: metadados e entries próprias | 404 conta/operação |
-
-GETs não geram efeitos. GET da conta retorna account_key, customer_key, balance_cents, currency=BRL, status e status_version. Listagem de contas é ordenada por ID interno crescente e retorna somente contas do contexto. Não há rota /balance duplicada.
-
-O cadastro devolve customer_key; a abertura aprovada devolve account_key e opening_result=APPROVED, que representa o resultado original, não o estado atual. Repetição idêntica devolve esses mesmos identificadores. A chave de mudança administrativa é a combinação versão esperada/conteúdo conforme seção 5, sem Idempotency-Key adicional.
-
-## 14. Catálogo de erros e respostas seguras
-
-O envelope contém title, description, translation e code, seguindo a convenção da base. Mensagens públicas descrevem a condição sem documento completo, credencial, SQL ou stack trace. Somente erro de abertura pode acrescentar details.account_key da conta própria para consulta/retomada. Recursos alheios têm resposta indistinguível dos inexistentes.
-
-| Código | HTTP | Significado |
-| --- | --- | --- |
-| QIT000001 | 400 | Formato/domínio individual inválido; números sem coerção; UUID ausente/inválido onde exigido. |
-| QIT000002 | 403 | INTERNAL-TOKEN ausente/inválido. |
-| QIT000004 | 403 | MONITORING-TOKEN ausente/inválido em readiness. |
-| QIT000005 | 403 | Contexto CUSTOMER-KEY ausente; se presente mas não UUID, 400/QIT000001. |
-| QIT000010 | 400 | Datas individuais válidas, mas from ≥ to. |
-| QIT001003 / QIT001004 | 422 / 409 | Documento inválido / documento já cadastrado. Código compartilhado para CPF/CNPJ, sem ecoar documento. |
-| QIT001008 / QIT001009 | 404 | Cliente / conta ausente ou fora do contexto autorizado. |
-| QIT001010 | 422 | Origem e destino iguais. |
-| QIT001011 / QIT001012 / QIT001013 | 409 | Saldo insuficiente / chave reutilizada com outro pedido válido / teto de saldo excedido. |
-| QIT001014 | 503 | Falha transitória de banco/pool pré-COMMIT; readiness indisponível. |
-| QIT001026 / QIT001028 | 404 | Destino inexistente / operação sem lançamento na conta autorizada. |
-| QIT001027 | 503 | COMMIT enviado ou possivelmente enviado sem confirmação confiável; mesma chave para recuperar, também em criação. |
-| QIT001029 | 409 | Estado impede a operação; mensagem genérica sem expor estado da contraparte. |
-| QIT001030 | 422 | Abertura recusada por bureau; details.account_key da conta própria. |
-| QIT001031 | 503 | Bureau indisponível/timeout/resposta inválida; análise pendente, details.account_key se conhecido. |
-| QIT001032 | 409 | Quota de Pix insuficiente para o principal. |
-| QIT001033 | 400 | Cursor indisponível, inválido ou fora da conta; não revela sua origem. |
-| QIT001034 | 409 | Versão esperada do estado não corresponde ao recurso/evento. |
-| QIT001035 | 403 | Aporte de sandbox desabilitado no ambiente. |
-| QIT000500 | 500 | Falha inesperada; sem stack trace público. |
-
-QIT000003 de token pessoal não é reutilizado: esse mecanismo saiu do desenho. Validar a unicidade de códigos na inicialização. Erro de schema monetário usa 400, sem coerção silenciosa; CPF/CNPJ de estrutura admitida que falhe na validação documental usa QIT001003. O catálogo é estável mesmo que a mensagem seja refinada.
-
-500 não é prova de que nenhum commit ocorreu. Se a aplicação não consegue classificar uma falha com segurança, o cliente preserva a intenção/chave para recuperação. Nenhum detalhe interno do banco deve vazar no envelope.
-
-## 15. Saldo, extrato e detalhe de transação
-
-### Visibilidade por conta
-
-GET /accounts/{account_key} retorna saldo e estado atuais da conta autorizada. Extrato retorna lançamentos dessa conta, e detalhe retorna os lançamentos de uma operação nessa conta. O destinatário não é operation.customer_id, mas tem direito de ver seu próprio crédito; autorizar apenas pelo solicitante impediria esse uso. Quem possui as duas contas faz uma consulta por conta.
-
-O detalhe contém operation_key, account_key, type, modality, currency=BRL, created_at e entries. Cada entry contém entry_key, role, delta_cents e balance_after_cents. A lista é completa, ordenada por ID crescente: até dois itens na origem e um no destino/aporte. Excluir idempotency_key, IDs internos, fee_cents global, saldo ou cadastro da contraparte.
-
-### Paginação do extrato
-
-1. Autorizar conta, validar limit e filtros. Sem cursor, iniciar pelos lançamentos mais recentes em id DESC.
-2. Com cursor, resolver entry_key dentro da conta autorizada, respeitando também o intervalo informado. Cursor indisponível, inválido ou alheio retorna 400/QIT001033 sem indicar a origem.
-3. Buscar account_id correspondente e id menor que o marcador, aplicar filtros e ordenar por id DESC, com LIMIT limit+1.
-4. Devolver até limit itens. Um item extra indica que há próxima página; next_cursor é o entry_key do último item efetivamente devolvido, não o extra. No fim, next_cursor=null e is_last_page=true.
-
-A resposta contém data, limit, next_cursor e is_last_page. Cada item apresenta entry_key, operation_key, role, delta_cents, balance_after_cents e created_at. Página vazia usa data=[], next_cursor=null e is_last_page=true. Não há total global ou número de página no extrato.
-
-created_at_from e created_at_to são opcionais e independentes; quando presentes, seguem RFC3339 com fuso explícito e são convertidos para UTC. Início é inclusivo e fim exclusivo; se ambos existirem, from deve ser menor que to. Datas individuais inválidas usam QIT000001; intervalo vazio/invertido com datas válidas usa QIT000010. O consumidor mantém os mesmos filtros entre páginas; outro intervalo inicia navegação sem cursor.
-
-### Por que cursor e qual garantia oferece
-
-Offset é simples, mas novas entradas podem deslocar as páginas de um extrato em atualização. Cursor por lançamento define uma posição estável para seguir aos registros mais antigos e aproveita o índice por conta/ID. Não permite salto arbitrário para a página 200 nem oferece contagem total. O UUID é o marcador público; não precisamos expor ID ou codificá-lo em base64.
-
-IDs atribuídos sob lock e a imutabilidade dos lançamentos sustentam a ordem por conta. GET de saldo, extrato e detalhe são requisições independentes e não compartilham snapshot. Um filtro final de tempo também não congela todas as leituras em um instante comum. Para uma auditoria histórica, o consumidor usa lançamentos e balance_after_cents; não subtrai apenas os itens de uma página do saldo atual.
-
-Listagem de contas conserva page/limit por ser uma consulta cadastral curta e de menor frequência. A escolha de cursor aplica-se ao extrato financeiro; não há dois modos alternativos nessa mesma rota.
-
-## 16. Estratégia de testes e critérios de aceite
-
-A suíte usa pytest e HTTP real, com setup de clientes, contas e saldo pelas rotas. Não importa src nem consulta diretamente PostgreSQL para provar regras de negócio. MockServer substitui somente o bureau; o restante da aplicação e o banco são reais. Asserções conferem saldo e histórico, além do status/código HTTP.
-
-| Área | Cenário e evidência exigida |
-| --- | --- |
-| Cadastro e acesso | PF/PJ, CNPJ numérico/alfanumérico, documento duplicado/inválido; token/contexto incorretos; conta alheia sem exposição. |
-| Criação concorrente | Mesma chave/pedido entre processos preserva um cliente/conta; chave com conteúdo diferente conflita; resposta perdida recupera o identificador. |
-| Bureau e retomada | REGULAR aprova; IRREGULAR/NOT_FOUND recusa; dívida não recusa; falha/timeout/resposta inválida mantém PENDING. Retomar após reinício pela mesma chave. |
-| Conclusão cadastral | Tentativas concorrentes ou resposta tardia não reabrem nem alteram a decisão já persistida. Replay após bloqueio preserva aprovação original. |
-| Estados | BLOCKED recebe créditos, mas não debita; PENDING/REJECTED não movimentam. Versão antiga não reaplica bloqueio após desbloqueio; evento não se duplica. |
-| Dinheiro e tarifas | Inteiros estritos, teto, insuficiência para principal+tarifa, destino no teto, tarifa zero sem entry; quatro combinações PF/PJ/modalidade. |
-| Atomicidade e reconciliação | Recusa não altera origem/destino/histórico. Soma de deltas e balance_after_cents reconstrói saldo; saldos+tarifas correspondem aos aportes. |
-| Idempotência financeira | Mesma chave: um efeito. Mudança de modalidade/conta/valor: conflito. Replay após bloqueio, consumo de saldo, mudança de tarifa, janela e 24h. |
-| Concorrência | Gasto duplo, A↔B, mesma chave e chaves diferentes entre instâncias. Examinar primeira tentativa, sem retry automático escondendo deadlock. |
-| Quota Pix | Duas contas disputam uma quota; tarifa e INTERNAL não entram. Testar 06h/20h, meia-noite, valores na borda e Pix para si. |
-| Consultas | Destinatário vê seu crédito; detalhe ASC, extrato DESC; cursor inválido/alheio, filtros, fim/vazio e entradas novas entre páginas. |
-| Recuperação e infraestrutura | Falha pré-COMMIT versus confirmação perdida; banco/bureau indisponíveis; isolamento de readiness; ausência de segredos em logs; clone limpo Linux. |
-
-api-fee0 compartilha imagem e banco com todas as tarifas zeradas: testar nova operação sem tarifa e replay de uma operação anteriormente tarifada. Reinício e confirmação perdida são ensaios específicos do host/CI; não montar Docker socket no runner. A suíte de concorrência não usa retries que escondam o defeito que pretende detectar.
-
-Para bordas de calendário e passagem de 24h, o perfil test pode substituir a leitura do relógio por instante fixo configurado no startup, igual nas duas APIs. Host reinicia APIs preservando banco para o próximo instante. Cálculo de janela e timestamp usam a mesma fonte; modo normal recusa essa configuração. Não há endpoint ou cabeçalho público para manipular o horário financeiro.
-
-## 17. Segurança, operação e reprodutibilidade
-
-| Parâmetro | Valor e aplicação |
-| --- | --- |
-| Pool por processo / overflow | 5 / 0. Dois processos de API permitem até dez conexões de pool. |
-| Espera pool / conexão PostgreSQL | 3 s / 5 s. Configurar em todas as sessões. |
-| lock_timeout / statement_timeout | 3 s / 5 s, inclusive autenticação e readiness. |
-| idle_in_transaction_session_timeout | 15 s; não manter transação durante HTTP externo. |
-| Cliente dos testes: conexão / leitura | 3 s / 30 s. |
-| Connector bureau: conexão / leitura | 3 s / 5 s; sem retry automático interno. |
-| Espera de readiness / limite de CI | 90 s / 15 min. |
-
-Esses limites são iniciais e devem ser medidos no ambiente; não são SLA nem prazo total de uma requisição. Conexão, espera de pool, espera de lock, execução SQL e inatividade de leitura limitam fases distintas. Toda sessão termina com commit/rollback e close; uma recusa não pode devolver ao pool uma transação aberta.
-
-### Sondas e logs
-
-GET / é público e retorna 200 com {"service":"banking-api"}. GET /health_check é público e retorna 204 para processo vivo. GET /readiness exige MONITORING-TOKEN, valida banco/schema e retorna 204 ou 503/QIT001014. Credencial inválida retorna 403/QIT000004. Sondas não escrevem dados; liveness não prova prontidão do banco.
-
-Logs estruturados incluem request_id, rota, duração, código, operation_key quando conhecido e classificação do resultado: confirmado, replay, recusado ou desconhecido. HTTP 201 em replay não representa uma nova movimentação. Um erro após envio de COMMIT deve manter a incerteza visível. Não registrar tokens, corpos completos, documentos completos ou parâmetros SQL sensíveis.
-
-Segredos vêm da configuração fora do Git, com exemplos sem valores reais. Dados de teste são fictícios; banco acessível apenas na rede interna do Compose. Aporte é uma capacidade de sandbox explicitamente habilitada. O mock de bureau é dependência local controlada, sem uso de documentos de pessoas.
-
-### Ambiente e persistência
-
-Compose de avaliação usa imagem construída, sem reload ou bind mount do código. PostgreSQL tem volume persistente e healthcheck TCP. api, banco e bureau simulado sustentam a demonstração; perfil test acrescenta runner e api-fee0. Runner aguarda readiness autenticada antes da suíte. Logs sanitizados são coletados se houver falha.
-
-database.sql inicializa um volume novo; não é mecanismo de migração de um banco existente. Na entrega do protótipo, validar instalação em ambiente limpo e reinício preservando o volume. Reset é ação explícita apenas para dados descartáveis. Alterações futuras de schema com dados existentes exigem migração versionada, sem apagar o volume como atalho.
-
-Não há dependência de um deploy público da API para a garantia local. Antes de operar com dados reais seriam necessários processos adicionais de backup/restauração, gestão de acesso, retenção e observabilidade. Esses processos não são simulados como concluídos pelo Compose acadêmico.
-
-## 18. Decisões, alternativas e consequências
-
-Estas escolhas consolidam o acordo técnico da equipe. Os fluxos anteriores detalham as regras; a síntese abaixo registra por que as adotamos e quais custos aceitamos.
-
-| Decisão | Justificativa, alternativa e consequência |
-| --- | --- |
-| Monólito + PostgreSQL | Commit comum simplifica a garantia financeira; microsserviços exigiriam coordenação e reconciliação. Implantação e disponibilidade compartilhadas. |
-| PF/PJ; um titular; várias contas | Reutiliza o núcleo e exercita autorização. PF apenas reduziria escopo; conta conjunta exigiria outro modelo. Quota não se multiplica por conta. |
-| Identidade delegada | Integrador já autentica usuários/representantes; token pessoal duplicaria emissão e recuperação. Confiança concentrada nele, com vínculos sempre conferidos pela API. |
-| Bureau mockado e PENDING durável | Resultados reproduzíveis, sem custo/dados reais. HTTP fora da transação e retomada por POST evitam worker; sem reenvio, PENDING pode durar indefinidamente. Dívida é informativa. |
-| Estado, eventos e versão | Estado atual facilita consulta; eventos explicam mudanças; versão rejeita comandos obsoletos. Só status perderia a trilha. Estado e evento confirmam juntos. |
-| Pix local e quota por cliente | Exercita modalidade/limites sem liquidação externa. Quota usa Pix confirmado, sob lock do cliente; contador separado acrescentaria estado a reconciliar. Pix real exige outro desenho. |
-| BIGINT + saldo materializado + entries | Centavos evitam float; saldo torna leitura direta; entries permitem reconstrução. NUMERIC serviria a outras escalas. Redundância precisa do mesmo commit e testes de invariantes. |
-| Reserva única e chave durável | Unicidade no banco elimina corrida entre processos; consulta prévia e TTL não bastam. Recusa desfaz reserva; replay mantém fato/tarifa original, sem regras voláteis. |
-| READ COMMITTED e locks ordenados | NO KEY UPDATE coordena saldo/estado e convive com KEY SHARE das FKs. Ordem cliente→contas, leitura fresca e escrita relativa são obrigatórias. SERIALIZABLE exigiria mais reexecuções. |
-| Saldo na conta; detalhe; cursor | /balance duplicaria dados; offset deslocaria páginas com novas entradas. Cursor mantém posição por conta, sem total/salto arbitrário nem snapshot compartilhado. |
-| pytest HTTP, banco real, mock externo | Exercita contrato e efeitos entre processos; mock de repository não comprovaria concorrência real. Maior custo de execução; concorrência e recuperação são testadas separadamente. |
-
-Tarifas e quotas são configurações da demonstração; a tarifa gravada é fato histórico. Serviços externos não participam do rollback PostgreSQL: o bureau é somente leitura cadastral. Pagamentos externos ou conclusão autônoma exigiriam rever confirmação, recuperação e reconciliação em uma nova RFC.
+# RFC: Protótipo bancário com movimentação idempotente e extrato que reconstrói o saldo
+
+| | |
+|---|---|
+| **Time** | Caio Cidade Rodrigues · Caio Vilquer Carvalho · Matheus Victor Barbosa dos Santos |
+| **Data** | 12/10/2026 |
+| **Versão** | 8 |
+
+## Contextualização
+
+### Entendendo o problema
+
+Um integrador de backend opera, em nome de clientes PF e PJ, o cadastro, a abertura de contas com
+análise cadastral, aportes de sandbox, transferências internas e Pix simulado com tarifa, e a
+consulta de saldo e extrato. A garantia é sobre o dinheiro: cada intenção do cliente produz no
+máximo um efeito, nenhum saldo fica negativo e o extrato reconstrói o saldo lançamento a
+lançamento, inclusive a tarifa. Se der errado, um timeout seguido de reenvio debita duas vezes,
+dois débitos simultâneos deixam a conta negativa, uma tarifa cobrada não aparece no histórico ou
+uma resposta perdida leva o cliente a repetir uma operação que já aconteceu.
+
+Fora do escopo desta entrega: liquidação externa e Pix real (SPI/DICT), crédito, conta conjunta,
+estorno, encerramento de conta, câmbio, frontend, login próprio e múltiplos integradores. Todos os
+dados são fictícios.
+
+### Explicando a solução de forma macro
+
+Um monólito FastAPI sobre um único PostgreSQL 16, com as versões fixadas pela base do bootcamp.
+Cliente, conta, operação e lançamentos vivem no mesmo banco, então cada movimentação confirma
+operação, lançamentos e saldos num único COMMIT. A unicidade da chave de idempotência no banco
+decide o que é repetição; locks de linha em ordem fixa (cliente, depois contas por id crescente)
+decidem quem debita primeiro; o saldo materializado muda de forma relativa, junto do lançamento
+que o explica. O bureau cadastral é um serviço externo simulado (MockServer), consultado sempre
+fora de transação: se ele falha, a conta fica PENDING e o mesmo pedido, com a mesma chave, retoma
+a análise. O integrador autentica os usuários; a API confere, a cada pedido, se a conta pertence
+ao cliente declarado.
+
+![Integrador e testes HTTP acessam a API; API e api-fee0 usam PostgreSQL; MockServer representa o bureau.](assets/ecossistema.svg)
+
+Dentro da API, cada pedido atravessa as mesmas camadas da base. O resource valida formato e
+cabeçalhos sem tocar no banco; o controller autoriza, aplica as regras e é o único que decide o
+COMMIT; o repository executa SQL sem confirmar nada; o DTO escolhe o que sai na resposta.
+
+```mermaid
+flowchart LR
+    H["HTTP"] --> M["middlewares<br/>request_id, log, token, sessão"]
+    M --> R["resource + schema<br/>formato e cabeçalhos"]
+    R --> C["controller<br/>autoriza, regras, locks, COMMIT"]
+    C --> P["repository<br/>SQL sem commit"]
+    P --> DB[("PostgreSQL 16")]
+    C --> K["connector<br/>timeout, sem retry"]
+    K --> B["bureau<br/>MockServer"]
+    C --> O["DTO<br/>campos públicos"]
+```
+
+Cada decisão abaixo traz o motivo, a alternativa que foi considerada e descartada, com o cenário
+em que ela seria a melhor escolha, e o custo que o time aceitou pagar.
+
+| Decisão | Por que foi tomada | Alternativa descartada e quando ela ganharia | Custo aceito |
+|---|---|---|---|
+| Monólito sobre um único PostgreSQL | Cliente, conta, tarifa e lançamentos dividem a mesma fronteira de COMMIT, e é essa fronteira que dá a garantia sobre o dinheiro. | Microsserviços para cliente, conta e operação. Débito, crédito e tarifa deixariam de caber num único COMMIT e pediriam saga e reconciliação. Ganhariam se as partes precisassem escalar ou ser implantadas separadamente, por times diferentes. | Implantação e disponibilidade são compartilhadas por todas as partes. |
+| Clientes PF e PJ, um titular por conta e várias contas por cliente | O mesmo núcleo atende os dois tipos de cliente e permite exercitar a autorização entre contas e os limites compartilhados. | Atender só PF, que reduziria o escopo e deixaria a tarifa por tipo de titular sem uso, ou conta conjunta, que pediria outro modelo de titularidade. A conta conjunta ganharia se o produto exigisse cotitulares. | Dois validadores de documento e quatro combinações de tarifa para testar. A quota Pix é do cliente e não se multiplica por conta. |
+| Identidade delegada ao integrador, com INTERNAL-TOKEN e CUSTOMER-KEY | O integrador já autentica os usuários e os representantes de empresas. A API só precisa conferir os vínculos entre cliente, conta e lançamento. | Um token pessoal por correntista, que duplicaria emissão, entrega, recuperação e rotação de segredo. Ganharia se os usuários acessassem a API diretamente ou se houvesse vários integradores. | Um integrador comprometido pode declarar qualquer cliente dele. Por isso a API confere cliente e conta em todo pedido e o token nunca sai do backend. |
+| Bureau simulado, consultado fora da transação, com a conta PENDING gravada antes | O simulador dá resultados reproduzíveis, sem custo e sem dados reais. Uma chamada HTTP externa não pode segurar lock nem conexão do banco, e a falha do bureau vira um estado que o mesmo pedido retoma. | Uma fila com worker que concluísse a análise sozinho. Seria mais uma peça para operar e monitorar. Ganharia se a conta precisasse ser concluída sem depender de um reenvio do integrador. | Sem reenvio, a conta pode ficar PENDING por tempo indefinido. A dívida informada pelo bureau é só registrada, porque o produto não oferece crédito. |
+| Estado atual, eventos e versão na conta | O estado responde às consultas, os eventos explicam cada mudança e a versão separa um comando antigo de uma decisão nova. | Guardar só o status. Perderia a trilha das mudanças e deixaria um bloqueio antigo valer de novo depois de um desbloqueio. Ganharia se não houvesse comandos concorrentes nem necessidade de auditoria. | O integrador precisa enviar a versão que leu, e estado e evento são confirmados sempre juntos. |
+| Pix local, com quota por cliente somada dos lançamentos confirmados | Exercita uma modalidade com regra própria sem liquidação externa. Somar os lançamentos evita um segundo número para reconciliar com o histórico. | Um contador de quota em tabela própria, que tornaria a leitura mais barata mas criaria outro estado para manter coerente. Ganharia com muitos Pix por cliente na mesma janela. | Uma soma por Pix, feita sob o lock do cliente. Um Pix real, com SPI e DICT, pediria outro desenho. |
+| Dinheiro em centavos inteiros (BIGINT), com teto de 2^53−1 | Inteiro não tem erro de ponto flutuante nem pede regra de arredondamento, e o teto cabe num número JSON lido por JavaScript. | NUMERIC ou decimal. Ganharia com juros, câmbio ou escala variável, que estão fora do escopo. | Valores fracionários de centavo não são representáveis. |
+| Saldo materializado na conta e um lançamento por efeito | O saldo se lê direto, e o histórico explica e reconcilia cada mudança. | Calcular o saldo somando o histórico a cada consulta. Tiraria a redundância, mas encareceria toda leitura e não dispensaria coordenar os débitos. Ganharia com histórico curto e leitura rara. | Toda escrita precisa atualizar saldo e histórico na mesma transação, e os testes conferem que os dois sempre batem. |
+| Chave de idempotência arbitrada por `UNIQUE` no banco, sem expirar | Só a unicidade resolve a corrida entre processos: consultar antes e inserir depois deixa uma janela. A recusa desfaz a reserva, e o reenvio devolve o fato original com a tarifa que foi gravada. | Chave em cache com TTL de 24 h. Uma intenção incerta reenviada depois da expiração seria debitada de novo. Ganharia se o volume de chaves impedisse guardá-las junto do fato financeiro e o consumidor tivesse prazo garantido para reenviar. | A chave fica guardada enquanto o fato financeiro existir. |
+| READ COMMITTED com `FOR NO KEY UPDATE` em ordem fixa | `NO KEY UPDATE` serializa saldo e estado sem bloquear a checagem das chaves estrangeiras de quem insere uma operação para a mesma conta. Em READ COMMITTED, o `SELECT` feito depois do `ON CONFLICT` enxerga o vencedor recém-confirmado. | Isolamento SERIALIZABLE, cujos abortos obrigariam a reexecutar a transação em todos os caminhos de escrita. Ganharia com muitos caminhos de escrita de acesso imprevisível, em que uma ordem global de locks fosse inviável. | Todo caminho de escrita precisa seguir a ordem cliente, depois contas por id, com leitura fresca e atualização relativa do saldo. |
+| Instante lido com `clock_timestamp()` depois dos locks | A janela do Pix e o extrato usam o instante em que a regra foi de fato avaliada. | Usar `now()`, que é o início da transação e ficaria anterior a uma espera longa por lock. Ganharia se nenhuma regra dependesse do horário. | Uma leitura extra do relógio por escrita. |
+| Saldo na própria conta, detalhe por conta e extrato por cursor | A consulta da conta já devolve o saldo, cada titular vê só os lançamentos da sua conta e o cursor mantém a posição enquanto entram lançamentos novos. | Uma rota de saldo separada, que duplicaria o dado, e paginação por offset, em que lançamentos novos deslocam as páginas. O offset ganharia se fosse preciso saltar para uma página arbitrária ou exibir o total de itens. | O extrato não tem total nem salto de página, e saldo, extrato e detalhe são leituras independentes, sem instantâneo comum. |
+| Testes por HTTP, com PostgreSQL real e só o bureau simulado | Exercitam o contrato e os efeitos entre processos, que é onde a concorrência acontece. | Testes com repositório simulado, mais rápidos, mas que não provariam concorrência real. Ganhariam para regra pura, sem banco. | A suíte custa mais para rodar, e concorrência e recuperação são ensaiadas em etapas separadas. |
+
+Tarifas e quotas são configuração da demonstração, mas a tarifa gravada numa operação é fato
+histórico e não muda. Serviços externos não participam do rollback do PostgreSQL: o bureau só
+informa a situação cadastral. Pagamentos externos pediriam rever confirmação, recuperação e
+reconciliação numa nova RFC.
+
+## Implementação
+
+### Rotas
+
+O integrador percorre as rotas na ordem abaixo. Cada escrita devolve o identificador público que a
+rota seguinte recebe: `customer_key` vira o contexto CUSTOMER-KEY, `account_key` entra no caminho e
+`operation_key` identifica a movimentação no detalhe.
+
+```mermaid
+flowchart LR
+    C["POST /customers<br/>devolve customer_key"] --> A["POST /accounts<br/>consulta o bureau<br/>devolve account_key"]
+    A --> D["POST .../deposits<br/>devolve operation_key"]
+    D --> T["POST .../transfers<br/>devolve operation_key"]
+    T --> S["GET .../statement<br/>lançamentos e next_cursor"]
+    T --> X["GET .../transactions/{operation_key}<br/>lançamentos da operação"]
+    A --> G["GET /accounts/{account_key}<br/>saldo, estado e versão"]
+    G --> P["PUT .../status<br/>bloqueia ou desbloqueia"]
+```
+
+Toda rota de negócio passa pelos mesmos filtros antes da regra de domínio, e a primeira recusa
+encerra o pedido. Por isso a tabela lista só as saídas próprias de cada rota; as comuns são estas:
+
+```mermaid
+flowchart LR
+    Q(["pedido"]) --> T{"INTERNAL-TOKEN<br/>válido?"}
+    T -- não --> E1["403<br/>QIT000002"]
+    T -- sim --> R{"caminho e<br/>método existem?"}
+    R -- não --> E2["404 QIT000404<br/>405 QIT000405"]
+    R -- sim --> F{"JSON, UUIDs e<br/>cabeçalhos válidos?"}
+    F -- não --> E3["400 QIT000001<br/>403 QIT000005"]
+    F -- sim --> A{"cliente e conta<br/>são do contexto?"}
+    A -- não --> E4["404 QIT001008<br/>404 QIT001009"]
+    A -- sim --> D{"regra de<br/>domínio passa?"}
+    D -- não --> E5["403, 409 ou 422<br/>da tabela"]
+    D -- sim --> OK(["200, 201<br/>ou 204"])
+```
+
+Em qualquer ponto depois da autorização, falha de banco ou de pool antes do COMMIT responde `503`
+(QIT001014); nas escritas, confirmação de COMMIT perdida responde `503` (QIT001027, resultado
+desconhecido); falha inesperada responde `500` (QIT000500), que também não prova rollback. O `400`
+cobre JSON fora do contrato, campo extra, valor monetário não inteiro, UUID inválido e
+Idempotency-Key ausente nas escritas; o `403` QIT000005 é a CUSTOMER-KEY ausente, exigida em todas
+as rotas de negócio menos o cadastro. As consultas só leem e são idempotentes; as rotas paginadas
+recusam parâmetro de query desconhecido ou repetido com `400`.
+
+| Método | Caminho | O que faz | Entrada (campos que importam) | Saídas (status e quando) |
+|---|---|---|---|---|
+| `POST` | `/customers` | Cadastra cliente PF ou PJ. Idempotente: Idempotency-Key única por integrador (`UNIQUE(creation_integrator, creation_idempotency_key)`), com o pedido normalizado comparado no reenvio. | `customer_type`, `document_number`, `name`; Idempotency-Key | `201` cliente criado ou reenvio do mesmo pedido; `409` documento já cadastrado (QIT001004) ou chave usada com outro pedido (QIT001012); `422` CPF ou CNPJ reprovado no dígito verificador ou com todos os dígitos iguais (QIT001003) |
+| `GET` | `/customers/{customer_key}` | Devolve o cadastro do próprio cliente. | `customer_key` igual à CUSTOMER-KEY | `200`; `404` cliente ausente ou de outro contexto (QIT001008) |
+| `POST` | `/accounts` | Abre conta PENDING e consulta o bureau fora da transação. Idempotente pela Idempotency-Key única por integrador; o reenvio retoma uma conta ainda PENDING. | `customer_key` igual ao contexto; Idempotency-Key | `201` `opening_result=APPROVED`, também no reenvio; `404` cliente ausente ou diferente do contexto (QIT001008); `409` chave usada com outro pedido (QIT001012); `422` bureau recusou (QIT001030, com `details.account_key`); `503` bureau falhou e a conta segue PENDING (QIT001031) |
+| `GET` | `/accounts` | Lista as contas do cliente do contexto, por id crescente. | `page` 0 a 999999999 (padrão 0); `limit` 1 a 100 (padrão 10) | `200` `data`, `page`, `limit`, `is_last_page`; `400` paginação fora da faixa (QIT000001) |
+| `GET` | `/accounts/{account_key}` | Saldo, moeda, estado e versão da conta. | conta do cliente do contexto | `200`; `404` conta ausente ou de outro cliente, com a mesma resposta nos dois casos (QIT001009) |
+| `PUT` | `/accounts/{account_key}/status` | Bloqueia ou desbloqueia. Idempotente pela versão: o reenvio da última transição administrativa devolve o mesmo resultado, sem novo evento. | `status` ACTIVE ou BLOCKED; `reason` com texto visível, até 240; `expected_version` | `200` `account_key`, `status`, `status_version`; `404` conta (QIT001009); `409` versão obsoleta (QIT001034) ou conta PENDING ou REJECTED (QIT001029) |
+| `POST` | `/accounts/{account_key}/deposits` | Aporte de sandbox na própria conta. Idempotente: `UNIQUE(customer_id, idempotency_key)`, uma chave por intenção em todas as contas e rotas monetárias do cliente. | `amount_cents` inteiro de 1 a 2^53−1; Idempotency-Key | `201` `operation_key`, também no reenvio; `403` sandbox desligado para aporte novo (QIT001035); `404` conta (QIT001009); `409` conta PENDING ou REJECTED (QIT001029), teto de saldo (QIT001013) ou chave usada com outro pedido (QIT001012) |
+| `POST` | `/accounts/{account_key}/transfers` | Transfere da própria conta para outra, de qualquer cliente; tarifa pelo tipo do titular e pela modalidade. Idempotente pela mesma `UNIQUE(customer_id, idempotency_key)`. | `destination_account_key`; `amount_cents`; `modality` INTERNAL ou PIX_SIMULATED; Idempotency-Key | `201` `operation_key`, também no reenvio; `404` conta (QIT001009) ou destino (QIT001026); `409` saldo para principal mais tarifa (QIT001011), estado (QIT001029), teto do destino (QIT001013), quota Pix (QIT001032) ou chave usada com outro pedido (QIT001012); `422` origem igual ao destino (QIT001010) |
+| `GET` | `/accounts/{account_key}/statement` | Extrato da conta, do mais recente ao mais antigo, paginado por cursor. | `cursor` (entry_key); `limit` 1 a 100; `created_at_from` e `created_at_to` RFC3339 com fuso | `200` `data`, `limit`, `next_cursor`, `is_last_page`; `400` cursor inválido ou de outra conta (QIT001033), data inválida (QIT000001) ou início que não precede o fim (QIT000010); `404` conta (QIT001009) |
+| `GET` | `/accounts/{account_key}/transactions/{operation_key}` | Lançamentos da operação nesta conta, em ordem crescente, sem dados da contraparte. | `operation_key` com lançamento na conta | `200`; `404` conta (QIT001009) ou operação sem lançamento nela (QIT001028) |
+| `GET` | `/` | Identifica o serviço; público. | nenhuma | `200` `{"service":"banking-api"}` |
+| `GET` | `/health_check` | Liveness pública: o processo responde. | nenhuma | `204` |
+| `GET` | `/readiness` | Readiness: banco e schema prontos. | MONITORING-TOKEN | `204`; `403` credencial ausente ou inválida (QIT000004); `503` banco indisponível (QIT001014) |
+
+Os cabeçalhos carregam a identidade e a intenção; nenhum deles vai no corpo:
+
+| Cabeçalho | Quem envia e para quê |
+|---|---|
+| INTERNAL-TOKEN | Credencial do integrador em todas as rotas de negócio. Fica só no backend dele. |
+| CUSTOMER-KEY | `customer_key` do cliente em nome de quem o integrador age. É declaração do integrador, não segredo: a API confere se cada conta pertence a esse cliente. |
+| Idempotency-Key | UUID de uma intenção de escrita. Novo UUID é nova intenção; para recuperar uma resposta perdida, reenvia-se o mesmo. Não expira. |
+| MONITORING-TOKEN | Credencial separada, aceita só em `/readiness`; não autoriza operação financeira. |
+| X-Request-ID | Opcional. Correlaciona o pedido com o log e volta em toda resposta; se faltar, a API gera um. |
+
+A transferência cobra a tarifa da origem conforme o tipo do titular e a modalidade; o destino
+recebe só o principal. O Pix simulado tem ainda uma quota por cliente, somada entre todas as
+contas dele, que só o principal enviado consome. Valores em centavos de BRL, configuráveis e
+validados na subida da API:
+
+| Regra | PF | PJ |
+|---|---|---|
+| Tarifa INTERNAL | 200 | 500 |
+| Tarifa PIX_SIMULATED | 0 | 100 |
+| Aporte de sandbox | 0 | 0 |
+| Quota Pix das 06h às 20h (America/Sao_Paulo) | 1.000.000 | 1.000.000 |
+| Quota Pix das 20h às 06h do dia seguinte | 100.000 | 100.000 |
+
+Um exemplo completo de escrita, com o sucesso e o envelope de erro que todas as recusas seguem
+(`description` em inglês, `translation` em português, `details` só nas recusas de abertura):
+
+```text
+POST /accounts/7b1f.../transfers
+INTERNAL-TOKEN: <credencial do integrador>
+CUSTOMER-KEY: 3d9a...            Idempotency-Key: 00000000-0000-4000-8000-000000000004
+{"destination_account_key": "c41e...", "amount_cents": 5000, "modality": "INTERNAL"}
+
+201  {"operation_key": "9f02..."}
+409  {"title": "Banking request error", "description": "Insufficient funds",
+      "translation": "Saldo insuficiente", "code": "QIT001011"}
+```
+
+Com saldo de 10.000 numa conta PF, esse pedido deixa 4.800 na origem (5.000 de principal e 200 de
+tarifa) e credita 5.000 no destino: 4.800 + 5.000 + 200 = 10.000.
+
+### Banco de Dados (Somente diagrama)
+
+```mermaid
+erDiagram
+    CUSTOMER ||--o{ ACCOUNT : "é titular de"
+    CUSTOMER ||--o{ OPERATION : "solicita"
+    ACCOUNT ||--|{ ACCOUNT_STATUS_EVENT : "muda de estado"
+    ACCOUNT ||--o{ OPERATION : "destino"
+    ACCOUNT |o--o{ OPERATION : "origem"
+    OPERATION ||--|{ ACCOUNT_ENTRY : "gera de 1 a 3"
+    ACCOUNT ||--o{ ACCOUNT_ENTRY : "acumula"
+
+    CUSTOMER {
+        bigint id PK "interno, nunca sai na resposta"
+        uuid customer_key UK "sai na resposta"
+        varchar customer_type UK "UNIQUE com document_number"
+        varchar document_number UK "CPF ou CNPJ normalizado"
+        varchar creation_integrator UK "UNIQUE com creation_idempotency_key"
+        uuid creation_idempotency_key UK "arbitra o reenvio do cadastro"
+        timestamptz created_at "quando foi criado"
+    }
+    ACCOUNT {
+        bigint id PK "ordem dos locks: id crescente"
+        uuid account_key UK "sai na resposta"
+        bigint customer_id FK
+        bigint balance_cents "saldo materializado"
+        varchar status "PENDING, ACTIVE, REJECTED, BLOCKED"
+        bigint status_version "versão esperada no PUT status"
+        uuid creation_idempotency_key UK "UNIQUE com creation_integrator"
+        timestamptz created_at "quando foi aberta"
+    }
+    ACCOUNT_STATUS_EVENT {
+        bigint id PK
+        bigint account_id FK "UNIQUE com version"
+        bigint version UK "igual ao status_version aplicado"
+        varchar new_status "estado depois da mudança"
+        varchar actor "integrador ou avaliação do bureau"
+        timestamptz created_at "quando mudou"
+    }
+    OPERATION {
+        bigint id PK
+        uuid operation_key UK "sai na resposta"
+        bigint customer_id FK "UNIQUE com idempotency_key"
+        uuid idempotency_key UK "um efeito por intenção"
+        varchar modality "NULL no aporte"
+        bigint origin_account_id FK "NULL no aporte"
+        bigint destination_account_id FK
+        bigint amount_cents "principal"
+        bigint fee_cents "tarifa gravada, mantida no replay"
+        timestamptz created_at "instante lido após os locks"
+    }
+    ACCOUNT_ENTRY {
+        bigint id PK "ordem do extrato, atribuído sob lock"
+        uuid entry_key UK "cursor público do extrato"
+        bigint operation_id FK "UNIQUE com role"
+        bigint account_id FK
+        varchar role UK "crédito, débito ou tarifa"
+        bigint delta_cents "nunca zero"
+        bigint balance_after_cents "saldo após o lançamento"
+        timestamptz created_at "mesmo instante da operação"
+    }
+```
+
+### Fluxos
+
+**Cadastro de cliente: caminho feliz**
+
+```mermaid
+sequenceDiagram
+    participant I as Integrador
+    participant A as API
+    participant P as PostgreSQL
+    I->>A: POST /customers + Idempotency-Key
+    A->>A: valida contrato, apara o nome, normaliza e confere CPF ou CNPJ
+    A->>P: INSERT customer ON CONFLICT DO NOTHING RETURNING
+    alt linha inserida
+        P-->>A: cliente novo
+        A->>P: COMMIT
+        A-->>I: 201 customer_key
+    else nenhuma linha: chave ou documento já existem
+        A->>P: SELECT do cadastro daquela chave
+        A-->>I: 201 no reenvio do mesmo pedido, 409 QIT001012 ou 409 QIT001004
+    end
+```
+
+1. Validar o contrato e a Idempotency-Key; aparar o nome e normalizar o documento: tirar a
+   pontuação, pôr as letras do CNPJ em maiúsculas e conferir os dígitos verificadores, sem nunca
+   tratar o documento como número.
+2. `INSERT ... ON CONFLICT DO NOTHING RETURNING` do cliente, com o pedido normalizado guardado em
+   `creation_request`, e COMMIT. A API responde `201` com `customer_key`.
+
+**Cadastro de cliente, falha: o INSERT não devolve linha**
+
+1. Outra linha já ocupa a chave de idempotência ou o par tipo e documento. Um `SELECT` separado
+   procura o cadastro daquela chave.
+2. Não achou: o conflito foi no documento, de outra chave. `409` QIT001004, sem criar cliente.
+3. Achou com o mesmo pedido normalizado: é reenvio, e a API devolve `201` com a `customer_key`
+   original. Achou com pedido diferente: `409` QIT001012. Nos dois casos a transação é desfeita.
+
+**Abertura de conta: caminho feliz e falha com o bureau indisponível**
+
+```mermaid
+sequenceDiagram
+    participant I as Integrador
+    participant A as API
+    participant P as PostgreSQL
+    participant B as Bureau (MockServer)
+    I->>A: POST /accounts + Idempotency-Key
+    A->>P: INSERT conta PENDING ON CONFLICT DO NOTHING, evento inicial, COMMIT
+    Note over A,P: transação e sessão fechadas antes do HTTP externo
+    A->>B: POST /check (3 s de conexão, 5 s de leitura, sem retry)
+    alt bureau responde REGULAR
+        B-->>A: REGULAR
+        A->>P: lock da conta, PENDING para ACTIVE, evento com a evidência, COMMIT
+        A-->>I: 201 opening_result=APPROVED
+    else bureau responde IRREGULAR ou NOT_FOUND
+        B-->>A: recusa
+        A->>P: lock da conta, PENDING para REJECTED, evento com a evidência, COMMIT
+        A-->>I: 422 QIT001030 com details.account_key
+    else timeout, erro HTTP ou resposta fora do contrato
+        B--xA: sem resposta válida
+        A-->>I: 503 QIT001031 com details.account_key, conta segue PENDING
+        I->>A: mesmo POST, mesma chave: retoma a análise da mesma conta
+    end
+```
+
+1. Arbitrar a Idempotency-Key e gravar a conta PENDING (saldo zero, versão 1) com o evento
+   inicial, numa transação curta já confirmada.
+2. Fechar transação e sessão antes do HTTP e consultar o bureau. Dívida informada pelo bureau é
+   só registrada: o produto não oferece crédito, então ela não recusa a abertura.
+3. Abrir outra transação, travar a conta com `FOR NO KEY UPDATE` e reler: só uma conta ainda
+   PENDING recebe a conclusão. Se outra tentativa concluiu antes, a resposta tardia é descartada e
+   vale a decisão gravada.
+4. Estado, versão e evento com a evidência do bureau entram no mesmo COMMIT. Na falha do bureau
+   nada muda no banco: a conta existente é reaproveitada no reenvio, e sem reenvio ela continua
+   PENDING, porque não há fila nem worker.
+
+**Estados da conta e bloqueio: caminho feliz**
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> PENDING: POST /accounts
+    PENDING --> ACTIVE: bureau REGULAR
+    PENDING --> REJECTED: bureau IRREGULAR ou NOT_FOUND
+    ACTIVE --> BLOCKED: PUT status BLOCKED
+    BLOCKED --> ACTIVE: PUT status ACTIVE
+    REJECTED --> [*]
+```
+
+| Estado | O que a conta pode fazer | Como sai dele |
+|---|---|---|
+| PENDING | Só consulta; saldo zero. | Decisão do bureau: ACTIVE ou REJECTED. |
+| ACTIVE | Debita e recebe. | BLOCKED, por comando do integrador. |
+| BLOCKED | Recebe crédito, inclusive aporte; não debita. | ACTIVE, por comando do integrador. |
+| REJECTED | Só consulta; saldo zero. | Não sai: é terminal para aquela abertura. |
+
+1. Travar a conta com `FOR NO KEY UPDATE` e reler estado e `status_version`; só ACTIVE e BLOCKED
+   aceitam o comando, e não há rota que force a aprovação de PENDING ou reabra REJECTED.
+2. Versão esperada igual à atual: mudar o estado, incrementar a versão e gravar o evento no mesmo
+   COMMIT (`200`). Se o estado já é o pedido, `200` sem novo evento.
+3. Versão atual igual à esperada mais um, com o último evento feito pelo integrador e de mesmo
+   destino e motivo: é o reenvio da última transição, que devolve o mesmo resultado.
+
+**Bloqueio de conta, falha: versão obsoleta**
+
+```mermaid
+flowchart LR
+    S["PUT .../status"] --> L["lock da conta<br/>relê estado e versão"]
+    L --> E{"ACTIVE ou<br/>BLOCKED?"}
+    E -- não --> R1["409 QIT001029"]
+    E -- sim --> V{"expected_version"}
+    V -- "igual à atual" --> M{"estado pedido<br/>difere do atual?"}
+    M -- sim --> C["muda estado, versão + 1,<br/>evento, COMMIT: 200"]
+    M -- não --> N["200 sem novo evento"]
+    V -- "atual = esperada + 1" --> U{"último evento é do integrador,<br/>mesmo destino e motivo?"}
+    U -- sim --> N2["200: reenvio"]
+    U -- não --> R2["409 QIT001034"]
+    V -- "outra" --> R2
+```
+
+1. Qualquer outra versão recebe `409` QIT001034, e nada muda. Por isso um bloqueio antigo,
+   reenviado depois de um desbloqueio, não volta a valer.
+2. A decisão do bureau não é um comando: um PUT com a versão anterior a ela também recebe `409`,
+   mesmo que o motivo coincida.
+3. Bloqueio e débito disputam o mesmo lock da conta. Se o bloqueio confirma primeiro, a
+   transferência relê BLOCKED e recusa com `409` QIT001029; se o débito confirma primeiro, ele vale,
+   e o bloqueio passa a valer para as operações seguintes.
+
+**Transferência: caminho feliz**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant I as Integrador
+    participant A as API
+    participant P as PostgreSQL
+    I->>A: POST .../transfers + Idempotency-Key
+    A->>A: valida contrato, INTERNAL-TOKEN e CUSTOMER-KEY
+    A->>P: SELECT cliente, conta de origem e conta de destino
+    A->>P: INSERT operation ON CONFLICT (customer_id, idempotency_key) DO NOTHING RETURNING
+    P-->>A: linha reservada: a chave é nova
+    opt modalidade PIX_SIMULATED
+        A->>P: SELECT cliente FOR NO KEY UPDATE
+    end
+    A->>P: SELECT contas ORDER BY id FOR NO KEY UPDATE
+    P-->>A: saldos e estados frescos
+    A->>P: SELECT clock_timestamp()
+    A->>A: confere estado, saldo para principal + tarifa, teto do destino e quota Pix
+    A->>P: UPDATE saldo relativo RETURNING e INSERT entry: principal, tarifa e crédito
+    A->>P: COMMIT
+    P-->>A: confirmado
+    A-->>I: 201 operation_key
+```
+
+1. Validar o contrato, o INTERNAL-TOKEN e a CUSTOMER-KEY; autorizar a conta de origem; resolver
+   o destino e recusar origem igual ao destino.
+2. Reservar a intenção: `INSERT` da operação com
+   `ON CONFLICT (customer_id, idempotency_key) DO NOTHING RETURNING`, na mesma transação do débito.
+3. No Pix, travar a linha do cliente; depois, origem e destino com `FOR NO KEY UPDATE`, sempre por
+   id crescente, e reler saldo e estado. A ordem fixa impede deadlock entre A→B e B→A.
+4. Ler `clock_timestamp()` uma vez, já com os locks, e conferir estado, saldo para principal mais
+   tarifa, teto do destino e, no Pix, a quota da janela de São Paulo.
+5. `UPDATE` relativo com `RETURNING` em cada conta e um lançamento por efeito: principal e tarifa
+   na origem, principal no destino. Tarifa zero não gera lançamento.
+6. Um único `COMMIT` confirma operação, lançamentos e saldos; só então a API responde `201` com
+   `operation_key`. O aporte segue o mesmo caminho, sem origem nem tarifa.
+
+**Aporte, falha: sandbox desligado**
+
+1. A reserva da chave vem antes da checagem do sandbox. O reenvio de um aporte já confirmado
+   devolve `201` com a operação original, e a mesma chave com outro valor devolve `409` QIT001012.
+2. Só o aporte novo chega à checagem: `403` QIT001035 e rollback, sem lançamento nem saldo.
+
+**Transferência, falha: dois débitos concorrentes sem saldo para ambos**
+
+```mermaid
+sequenceDiagram
+    participant A1 as API, pedido 1
+    participant P as PostgreSQL
+    participant A2 as API, pedido 2
+    Note over A1,A2: saldo 10.000, duas transferências INTERNAL de 7.000, chaves diferentes
+    A1->>P: INSERT reserva da chave 1
+    A2->>P: INSERT reserva da chave 2
+    A1->>P: SELECT contas FOR NO KEY UPDATE
+    P-->>A1: lock concedido, saldo 10.000
+    A2->>P: SELECT contas FOR NO KEY UPDATE
+    Note right of P: o pedido 2 espera o lock
+    A1->>P: debita 7.000 e 200 de tarifa, credita o destino, COMMIT
+    P-->>A2: lock concedido, saldo 2.800
+    A2->>P: ROLLBACK, que desfaz também a reserva
+    Note over A1,A2: pedido 1 recebe 201 e pedido 2 recebe 409 QIT001011
+```
+
+1. As duas reservam suas chaves, que não conflitam. A primeira obtém o lock da origem; a segunda
+   espera no `FOR NO KEY UPDATE`.
+2. A primeira debita principal e tarifa, confirma e libera o lock. A segunda relê o saldo
+   restante (2.800, para PF) e recusa.
+3. A recusa desfaz a transação inteira, inclusive a reserva: não sobra operação nem lançamento, e
+   a mesma chave pode ser reavaliada depois, quando houver saldo.
+
+**Transferência, falha: confirmação do COMMIT perdida**
+
+```mermaid
+sequenceDiagram
+    participant I as Integrador
+    participant A as API
+    participant P as PostgreSQL
+    I->>A: POST .../transfers com a chave K
+    A->>P: reserva, locks, efeitos e COMMIT
+    P--xA: o banco confirmou, mas a confirmação não chega
+    A-->>I: 503 QIT001027, resultado desconhecido
+    Note over I: espera 0,5 s, 1 s, 2 s e 4 s, sempre com a mesma chave e o mesmo corpo
+    I->>A: POST .../transfers com a chave K
+    A->>P: INSERT ON CONFLICT DO NOTHING
+    P-->>A: nenhuma linha: a chave já existe
+    A->>P: SELECT da operação da chave, em READ COMMITTED
+    alt mesmo tipo, modalidade, contas e valor
+        A-->>I: 201 com a mesma operation_key, sem novo débito
+    else pedido diferente
+        A-->>I: 409 QIT001012
+    end
+```
+
+1. A API não presume rollback: responde `503` QIT001027 e registra o resultado como desconhecido.
+2. O cliente reenvia a mesma chave e o mesmo corpo, sem nunca trocar a chave da intenção.
+3. O `INSERT ... ON CONFLICT` encontra a operação confirmada; um `SELECT` separado em READ
+   COMMITTED a lê e compara tipo, modalidade, contas e valor. A tarifa não entra na comparação: é
+   calculada pelo servidor e preservada como foi gravada.
+4. Igual: `201` com a mesma `operation_key`, sem novo débito, tarifa ou consumo de quota, mesmo
+   que a conta tenha sido bloqueada depois. Se o COMMIT não tinha acontecido, o reenvio executa a
+   transferência pela primeira vez.
+
+**Pix simulado, falha: quota da janela esgotada**
+
+```mermaid
+sequenceDiagram
+    participant A1 as API, Pix da conta A
+    participant P as PostgreSQL
+    participant A2 as API, Pix da conta B
+    Note over A1,A2: mesmo cliente, janela noturna com quota de 100.000, dois Pix de 60.000
+    A1->>P: SELECT cliente FOR NO KEY UPDATE
+    A2->>P: SELECT cliente FOR NO KEY UPDATE
+    Note right of P: o Pix da conta B espera o lock do cliente
+    A1->>P: lock da conta A, soma o consumo da janela: 0 + 60.000 cabe
+    A1->>P: débito, crédito, COMMIT
+    P-->>A2: lock do cliente concedido
+    A2->>P: lock da conta B, soma o consumo da janela: 60.000 + 60.000 passa de 100.000
+    A2->>P: ROLLBACK
+    Note over A1,A2: conta A recebe 201 e conta B recebe 409 QIT001032
+```
+
+1. O Pix trava primeiro a linha do cliente. Assim duas contas do mesmo cliente não consomem a
+   mesma quota ao mesmo tempo: o segundo pedido só soma o consumo depois que o primeiro termina.
+2. Com o instante lido após os locks, a API localiza a janela em America/Sao_Paulo. Uma operação
+   à 01:00 pertence à janela que começou às 20:00 do dia anterior.
+3. O consumo é a soma dos débitos de principal já confirmados na janela. Se ele mais o valor
+   pedido passa da quota, `409` QIT001032 e rollback. Tarifa, recebimento e INTERNAL não consomem.
+
+**Extrato: caminho feliz e falha com cursor inválido**
+
+```mermaid
+sequenceDiagram
+    participant I as Integrador
+    participant A as API
+    participant P as PostgreSQL
+    I->>A: GET .../statement com limit 2
+    A->>P: lançamentos da conta por id decrescente, LIMIT 3
+    A-->>I: 2 itens, next_cursor é a entry_key do 2º, is_last_page false
+    I->>A: GET .../statement com limit 2 e cursor
+    A->>P: resolve o cursor na conta e no intervalo, busca id menor, LIMIT 3
+    A-->>I: itens restantes, next_cursor null, is_last_page true
+```
+
+1. Validar os parâmetros e o `limit`, autorizar a conta e validar datas e cursor. Sem cursor, a
+   leitura começa pelos lançamentos mais recentes.
+2. Buscar um item além do `limit`: ele só indica que há próxima página. O `next_cursor` é a
+   `entry_key` do último item devolvido.
+3. Os ids dos lançamentos nascem sob o lock da conta, então a ordem por id é a ordem dos fatos
+   daquela conta. Lançamento novo entra antes da primeira página e não desloca as seguintes.
+4. Cursor malformado, de outra conta ou fora do intervalo de datas recebe `400` QIT001033, com a
+   mesma resposta nos três casos, para não revelar de quem ele é.
+
+**Detalhe da operação: caminho feliz e falha com operação sem lançamento na conta**
+
+1. Autorizar a conta do caminho e buscar os lançamentos da operação só naquela conta, em ordem
+   crescente. A resposta traz `operation_key`, `type`, `modality`, `created_at` e as `entries`.
+2. Cada lado vê apenas o que aconteceu na sua conta, e nunca o saldo, a tarifa ou o cadastro da
+   contraparte:
+
+| Quem consulta | Lançamentos que vê | O que não vê |
+|---|---|---|
+| Titular da origem | `TRANSFER_DEBIT` do principal e, se houve tarifa, `FEE_DEBIT`, cada um com o seu `balance_after_cents`. | Saldo e lançamentos do destino. |
+| Titular do destino | `TRANSFER_CREDIT` do principal, com o seu `balance_after_cents`. | Tarifa paga, saldo da origem e chave de idempotência. |
+| Titular de um aporte | `DEPOSIT_CREDIT`. | Não há contraparte. |
+
+3. Operação inexistente e operação que não tem lançamento naquela conta recebem a mesma resposta:
+   `404` QIT001028. O destinatário pode consultar o crédito que recebeu mesmo sem ter pedido a
+   operação, desde que use a própria conta no caminho.
+
+> **Principal desafio**
+>
+> - **Qual é:** fazer cada intenção financeira produzir exatamente um efeito (nenhum débito
+>   duplicado, saldo nunca negativo, extrato que reconstrói o saldo) com requisições concorrentes,
+>   reenvios e respostas perdidas.
+> - **Por que é difícil:** a solução óbvia, "procurar a chave, ler o saldo, debitar", quebra em três
+>   cenários: dois débitos de chaves diferentes leem o mesmo saldo de 10.000 e debitam 7.000 cada;
+>   o mesmo pedido reenviado após timeout passa pela consulta antes que o primeiro confirme; e um
+>   503 depois do COMMIT não prova que nada aconteceu.
+> - **Como o desenho resolve:** `INSERT ... ON CONFLICT (customer_id, idempotency_key) DO NOTHING`
+>   arbitra a repetição no banco, e um `SELECT` separado em READ COMMITTED devolve o replay;
+>   `FOR NO KEY UPDATE` nas contas por id crescente (no Pix, depois do lock do cliente) serializa
+>   saldo, estado e quota; `UPDATE` relativo com `RETURNING` e os lançamentos entram no mesmo
+>   `COMMIT`; confirmação perdida vira 503/QIT001027 e se recupera reenviando a mesma chave.

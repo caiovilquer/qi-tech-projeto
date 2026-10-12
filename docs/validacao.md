@@ -18,12 +18,13 @@ Resultado final: **92 testes pytest aprovados**, sem falhas ou testes ignorados:
 | Banco indisponível | 1 aprovado | 0,04s |
 | Sandbox desabilitado | 1 aprovado | 0,07s |
 
-Calendário, replay após 24h, mudança de tarifa, reinícios, recuperação e
-sanitização dos logs também passaram. O roteiro completo registrou **84,6s**
-em volume novo e terminou com código de saída zero, incluindo a restauração
-final das APIs. Outro volume novo registrou 82,4s, e a repetição sobre um
-volume já populado passou em 76,2s. A suíte principal foi repetida seis vezes
-seguidas no mesmo volume, com 87 aprovações em cada uma.
+Calendário, replay após 24h, mudança de tarifa, reinícios, recuperação e a
+busca de credenciais nos logs também passaram. O roteiro registrou **84,6s**
+em volume novo até o fim dos ensaios (a medição antecede a restauração final
+das APIs, no `finally`) e terminou com código de saída zero. Outro volume novo
+registrou 82,4s, e a repetição sobre um volume já populado passou em 76,2s. A
+suíte principal foi repetida seis vezes seguidas no mesmo volume, com 87
+aprovações em cada uma.
 
 Para reproduzir em um projeto Compose isolado:
 
@@ -62,7 +63,7 @@ Nesta revisão:
   reenvio, e o pedido recebe 409/QIT001034. O novo caso falhou contra o código
   anterior e passou após a correção.
 - O campo `translation` dos 21 códigos bancários repetia a descrição em
-  inglês, fora da convenção da base citada na seção 14 da RFC. Agora traz o
+  inglês, fora da convenção da base citada na seção 14 da especificação. Agora traz o
   texto em português; os códigos e os status HTTP não mudaram.
 - O roteiro esperava o MockServer reiniciado com uma pausa fixa de 5s. Agora
   aguarda as expectativas de `config/bureau.json` estarem carregadas, com
@@ -107,14 +108,14 @@ os 29 testes de abertura e erros passaram em uma execução dirigida de 9,98s.
 | Bureau | Regular, irregular, não encontrado, dívida, corpo inválido, falha HTTP e timeout; retomada e conclusão única |
 | Estados | Bloqueio/desbloqueio versionado, no-op, reenvio antigo, versão que apontaria para a decisão do bureau e corridas com débito ou outro comando administrativo |
 | Dinheiro | Principal+tarifa, teto, inteiros estritos, quatro tarifas PF/PJ/modalidade, tarifa zero sem delta zero e recusa sem efeitos |
-| Concorrência | Gasto duplo, A↔B, mesma chave, intenção distinta, reserva abortada e quota compartilhada entre contas |
+| Concorrência | Gasto duplo, A↔B, mesma chave, intenção distinta e quota compartilhada entre contas; reserva abortada em sequência e, na corrida entre instâncias, quando a API com tarifa vence (a ordem não é controlada) |
 | Reconciliação | Deltas e balance_after_cents reconstroem saldo; saldos+tarifas correspondem aos aportes |
 | Consultas | Detalhe ASC, extrato DESC, destinatário isolado, cursor inválido/alheio, filtros, páginas finais/vazias e novas entradas |
 | Calendário | Bordas de 06h e 20h, meia-noite sem reset da quota noturna, limite exato e replay após mais de 24h |
-| Persistência | Reinícios de APIs/banco conservam saldos, histórico, chaves e abertura pendente; retomada usa a mesma conta |
+| Persistência | Reinícios de APIs/banco conservam saldos, histórico e chaves; a abertura pendente atravessa os reinícios das APIs e a retomada usa a mesma conta |
 | Configuração | Tarifa alterada afeta operação nova e preserva replay; sandbox desabilitado; relógio de teste recusado no modo normal |
 | Infraestrutura | Raiz, liveness/readiness, credenciais separadas, 403/404/405, acentos, tradução dos códigos bancários e correlação de falhas 500 |
-| Logs | Ausência de credenciais/documentos e presença das classificações confirmado, replay e desconhecido |
+| Logs | Ausência de credenciais e presença das classificações confirmado, replay e desconhecido (a busca pelo documento não alcançava os containers recriados; ver a revisão da RFC, abaixo) |
 
 A [matriz de erros](erros-testes.md) relaciona os 27 códigos públicos aos testes.
 As primeiras tentativas concorrentes são avaliadas sem retries; recuperação é
@@ -139,22 +140,45 @@ inesperado restauram a configuração do container ao final.
 
 ## Reprodutibilidade
 
-- Schema gerado pelos models corresponde ao database.sql de bootstrap.
+- Schema gerado pelos models corresponde ao database.sql de bootstrap: conferência
+  manual com `tools/schema.py`, repetida em 12/10/2026 com SQLAlchemy 2.0.23 e
+  saída idêntica. Nenhuma etapa do roteiro ou do CI faz essa comparação.
 - Bootstrap executado em volume isolado novo; repetições conservaram os dados.
 - API principal e api-fee0 usam a mesma imagem/banco, variando as tarifas;
   api-fault usa essa imagem com acesso ao banco pelo proxy de teste.
 - Reinícios preservam volumes; reset não é utilizado como atualização de dados.
 - `docker compose --profile test --profile fault config -q` e `pip check`
   passaram; sintaxe Python, JSONs, SVGs e links locais da documentação conferidos.
-- O PDF da RFC foi aberto e teve suas 17 páginas e 18 seções verificadas. O
-  texto extraído coincide com o `RFC-v8.md`; as diferenças são rodapés,
-  rótulos dos diagramas e quebras de linha.
-- Workflow GitHub Actions preparado para Ubuntu, com limite de 15 minutos.
-  Esta revisão não executou o workflow remoto nem mediu cobertura de linhas.
+- O PDF da RFC segue o modelo do bootcamp, com as seções Contextualização e
+  Implementação, e é gerado por `tools/rfc_pdf.py` a partir do `RFC-v8.md`.
+- Workflow do GitHub Actions (Ubuntu, limite de 15 minutos) executado com
+  sucesso nos pushes de `5ff7373`, `a4390b1` e da branch desta revisão.
+  Cobertura de linhas não foi medida.
 
 O bootstrap inicializa somente volume novo. Evoluções de schema com dados
 existentes precisam de migração. Pix e bureau permanecem simulações de sandbox,
 conforme o escopo da RFC.
+
+## Revisão da RFC contra o código
+
+A revisão da RFC contra o código e os testes trouxe correções cuja execução de
+referência é a do GitHub Actions no pull request desta revisão:
+
+- RFC reescrita no modelo do bootcamp; o texto detalhado foi para
+  [especificacao.md](especificacao.md), com as divergências de contrato corrigidas.
+- Catálogo de erros: código repetido dentro do catálogo bancário passa a ser
+  recusado na inicialização.
+- Testes: CPF com dígito verificador errado, respostas idênticas para conta
+  alheia e inexistente e preservação completa no teto de saldo. A suíte
+  principal passa de 87 para 88 testes.
+- Roteiro: os logs das APIs são guardados antes de cada recriação de container,
+  e a busca pelo documento do cliente pendente passa a alcançar as fases que o
+  enviam; as credenciais procuradas são as que as APIs usaram.
+
+Sem Docker, foi conferido localmente com Python 3.11.17 e as versões fixadas:
+a API sobe, as respostas que não dependem do banco mantêm status e código, uma
+duplicata injetada no catálogo é recusada, 10.000 CPFs com dígito verificador
+alterado recebem 422/QIT001003 e a coleta encontra 88 + 5 testes.
 
 ## Registro anterior
 

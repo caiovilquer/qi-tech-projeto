@@ -19,18 +19,18 @@ de regras, sessões ou banco. O MockServer representa somente o bureau externo.
 | QIT000404 | 404 | Rota ausente com token válido, mantendo envelope da base; [test_health.py](../tests/integration/test_health.py) |
 | QIT000405 | 405 | Método não permitido em rota pública; [test_health.py](../tests/integration/test_health.py) |
 | QIT000500 | 500 | Arquivo de schema ausente na API de teste: envelope seguro, request_id e ausência de dados internos; [operational_errors.py](../tests/operational_errors.py) |
-| QIT001003 | 422 | CPF/CNPJ matematicamente inválido; [test_customers.py](../tests/integration/test_customers.py) |
+| QIT001003 | 422 | CPF com dígitos repetidos ou com o primeiro ou o segundo dígito verificador errado, e CNPJ alfanumérico com dígito verificador errado; [test_customers.py](../tests/integration/test_customers.py) |
 | QIT001004 | 409 | Documento duplicado, inclusive criação concorrente; [test_customers.py](../tests/integration/test_customers.py) |
-| QIT001008 | 404 | Cliente ausente ou fora do contexto, impedindo abertura; [test_errors.py](../tests/integration/test_errors.py) |
-| QIT001009 | 404 | Conta ausente ou alheia, com resposta indistinguível; [test_accounts.py](../tests/integration/test_accounts.py) |
+| QIT001008 | 404 | Cliente ausente usado como contexto ([test_errors.py](../tests/integration/test_errors.py)), abertura para cliente fora do contexto ([test_accounts.py](../tests/integration/test_accounts.py)) e leitura de cadastro alheio ([test_customers.py](../tests/integration/test_customers.py)) |
+| QIT001009 | 404 | Conta ausente ou alheia, com corpos de resposta comparados e idênticos; [test_accounts.py](../tests/integration/test_accounts.py) |
 | QIT001010 | 422 | Origem igual ao destino; [test_money.py](../tests/integration/test_money.py) |
 | QIT001011 | 409 | Saldo insuficiente para principal e tarifa, sem efeitos; [test_money.py](../tests/integration/test_money.py) |
 | QIT001012 | 409 | Mesma chave com intenção diferente, sem alterar o fato original; testes de clientes, contas, dinheiro e Pix |
-| QIT001013 | 409 | Crédito acima do teto, preservando saldos/histórico; [test_money.py](../tests/integration/test_money.py) |
+| QIT001013 | 409 | Crédito acima do teto, por aporte e por transferência, preservando saldos e históricos de origem e destino; [test_money.py](../tests/integration/test_money.py) |
 | QIT001014 | 503 | Banco parado e escrita interrompida antes do COMMIT; [operational_errors.py](../tests/operational_errors.py) e [fault_transport.py](../tests/fault_transport.py) |
 | QIT001026 | 404 | Destino inexistente; [test_money.py](../tests/integration/test_money.py) |
 | QIT001027 | 503 | Confirmação de COMMIT descartada depois de o banco confirmar: mesma chave recupera sem novo débito; [fault_transport.py](../tests/fault_transport.py) |
-| QIT001028 | 404 | Operação inexistente ou sem lançamento na conta autorizada; [test_queries.py](../tests/integration/test_queries.py) |
+| QIT001028 | 404 | Operação existente sem lançamento na conta autorizada ([test_queries.py](../tests/integration/test_queries.py)) e operação inexistente ([test_money.py](../tests/integration/test_money.py)) |
 | QIT001029 | 409 | Estado impede a ação; PENDING/REJECTED sem movimentação e BLOCKED sem novo débito; testes de contas e dinheiro |
 | QIT001030 | 422 | Bureau irregular/não encontrado recusa abertura, preservando conta e chave próprias; [test_accounts.py](../tests/integration/test_accounts.py) |
 | QIT001031 | 503 | Bureau indisponível, malformado, referência com NUL/Unicode inválido ou timeout mantém PENDING e permite retomada da mesma conta; [test_accounts.py](../tests/integration/test_accounts.py) |

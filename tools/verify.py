@@ -23,8 +23,13 @@ env=dict(os.environ,APP_ENV='test',TEST_CLOCK='2026-10-11T12:00:00Z',API_PORT=ar
          FEE_PF_INTERNAL='200',FEE_PJ_INTERNAL='500',
          FEE_PF_PIX_SIMULATED='0',FEE_PJ_PIX_SIMULATED='100',
          PIX_DAY_LIMIT='1000000',PIX_NIGHT_LIMIT='100000')
+# Credentials come from the shell or the sandbox defaults. The shell wins
+# over .env in Compose, so the log scan searches the values the APIs used.
+env.setdefault('INTERNAL_TOKEN','sandbox-integrator-only')
+env.setdefault('MONITORING_TOKEN','sandbox-monitoring-only')
 base=['docker','compose','-p',args.project,'--profile','test','--profile','fault']
 state={}
+collected=[]
 started=time.monotonic()
 BUREAU_LOADED='''import os,time,requests
 deadline=time.monotonic()+60
@@ -49,7 +54,13 @@ def command(arguments, capture=False, expected_failure=False):
     return result.stdout
 
 
+def keep_logs():
+    # Recreating a container discards its logs; keep them for the final scan.
+    collected.append(command(['logs','--no-color','api','api-fee0'],capture=True))
+
+
 def restart_at(clock, fee='200'):
+    keep_logs()
     env.update(TEST_CLOCK=clock,FEE_PF_INTERNAL=fee)
     command(['up','-d','--wait','api','api-fee0'])
 
@@ -107,14 +118,15 @@ try:
     # for that expectation instead of a fixed pause; the API itself has no retries.
     command(['run','--rm','--no-deps','runner','python','-c',BUREAU_LOADED])
     scenario('bureau_recovered')
+    keep_logs()
     env['SANDBOX_DEPOSITS']='false'
     command(['up','-d','--wait','api','api-fee0'])
     command(['run','--rm','--no-deps','-e','SCENARIO_STATE='+json.dumps(state),'runner','pytest','-q',
              'operational_errors.py::test_disabled_sandbox_returns_403_without_financial_effects','-p','no:cacheprovider'])
     command(['run','--rm','--no-deps','-e','APP_ENV=sandbox','-e','TEST_CLOCK=2026-10-11T12:00:00Z','api'],expected_failure=True)
     # Scan only application logs, never raw SQL, passwords or bodies.
-    logs=initial_logs+command(['logs','--no-color','api','api-fee0','api-fault'],capture=True)
-    secrets=[env.get('INTERNAL_TOKEN','sandbox-integrator-only'),env.get('MONITORING_TOKEN','sandbox-monitoring-only'),state['pending_body']['document_number']]
+    logs=initial_logs+''.join(collected)+command(['logs','--no-color','api','api-fee0','api-fault'],capture=True)
+    secrets=[env['INTERNAL_TOKEN'],env['MONITORING_TOKEN'],state['pending_body']['document_number']]
     assert all(secret not in logs for secret in secrets),'Sensitive data in API logs'
     assert '"result": "desconhecido"' in logs and 'QIT001027' in logs
     assert '"result": "replay"' in logs and '"result": "confirmado"' in logs

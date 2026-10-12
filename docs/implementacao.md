@@ -1,6 +1,7 @@
 # Implementação bancária
 
-O serviço implementa a [RFC v8](RFC-v8.md) em um monólito Python/FastAPI,
+O serviço implementa a [RFC v8](RFC-v8.md), detalhada na
+[especificação](especificacao.md), em um monólito Python/FastAPI,
 com PostgreSQL 16 e cinco entidades: customer, account, operation, account_entry
 e account_status_event. Os contratos JSON são estritos; valores monetários usam
 centavos inteiros de BRL, com teto de 2^53−1.
@@ -85,7 +86,7 @@ test, sem endpoint/cabeçalho público para manipulá-lo.
 
 A suíte usa pytest e HTTP real com PostgreSQL, prepara cenários pelas rotas e
 substitui somente o bureau por MockServer. O roteiro `tools/verify.py` executa
-87 testes principais e 5 de falhas operacionais/transporte, além dos ensaios
+88 testes principais e 5 de falhas operacionais/transporte, além dos ensaios
 de calendário, reinício e recuperação. A [matriz de erros](erros-testes.md) cobre
 os 27 códigos públicos; [validacao.md](validacao.md) registra os resultados.
 

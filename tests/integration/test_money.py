@@ -51,10 +51,13 @@ def test_money_is_strict(value):
 def test_ceiling_and_private_errors():
     c,_=customer(); d,_=customer(); a=account(c); b=account(d)
     ok(deposit(d,b,2**53-1),201)
+    ceiling=history(d,b)
     error(deposit(d,b,1),'QIT001013',409)
     ok(deposit(c,a,1000),201)
+    funds=history(c,a)
     error(transfer(c,a,b,1),'QIT001013',409)
-    assert balance(c,a)==1000
+    assert balance(c,a)==1000 and balance(d,b)==2**53-1
+    assert history(c,a)==funds and history(d,b)==ceiling
     error(transfer(c,a,a,1),'QIT001010',422)
     error(transfer(c,a,uid(),1),'QIT001026',404)
     error(deposit(d,a,1),'QIT001009',404)
