@@ -66,6 +66,21 @@ flowchart LR
   durante a navegação. Ganharia se o consumidor precisasse saltar para uma página arbitrária ou
   exibir o total de itens.
 
+As decisões tomadas, com o motivo de cada uma e o preço que o time aceitou pagar:
+
+| Decisão | Por que foi tomada | Custo aceito |
+|---|---|---|
+| Monólito sobre um único PostgreSQL | Cliente, conta, tarifa e lançamentos dividem a mesma fronteira de COMMIT, e é ela que dá a garantia sobre o dinheiro. | Implantação e disponibilidade são compartilhadas por todas as partes. |
+| Identidade delegada ao integrador (INTERNAL-TOKEN mais CUSTOMER-KEY) | O integrador já autentica os usuários; um token por correntista duplicaria emissão, entrega, recuperação e rotação de segredo. | Um integrador comprometido pode declarar qualquer cliente dele. Por isso a API confere cliente e conta em todo pedido. |
+| Bureau consultado fora da transação, com PENDING gravado antes | Uma chamada HTTP externa não pode segurar lock nem conexão do banco, e a falha do bureau vira um estado que o mesmo pedido retoma. | Sem reenvio, a conta fica PENDING: não há fila nem worker para concluir sozinho. |
+| Dinheiro em centavos inteiros (BIGINT), com teto de 2^53−1 | Inteiro não tem erro de ponto flutuante nem pede regra de arredondamento, e o teto cabe num número JSON lido por JavaScript. | Não serve a juros, câmbio ou escala variável, que pediriam NUMERIC. |
+| Saldo materializado na conta e um lançamento por efeito | O saldo se lê direto, e o histórico explica e reconcilia cada mudança. Somar o histórico a cada consulta custaria mais e não dispensaria coordenar os débitos. | Toda escrita precisa atualizar saldo e histórico na mesma transação. |
+| Chave de idempotência arbitrada por `UNIQUE` no banco, sem expirar | Só a unicidade resolve a corrida entre processos: consultar antes e inserir depois deixa uma janela. | A chave fica guardada enquanto o fato financeiro existir. |
+| READ COMMITTED com `FOR NO KEY UPDATE` em ordem fixa | `NO KEY UPDATE` serializa saldo e estado sem bloquear a checagem das chaves estrangeiras de quem insere uma operação para a mesma conta, o que `FOR UPDATE` bloquearia. Em READ COMMITTED, o `SELECT` feito depois do `ON CONFLICT` enxerga o vencedor recém-confirmado. | Todo caminho de escrita precisa seguir a ordem cliente, depois contas por id. |
+| Instante lido com `clock_timestamp()` depois dos locks | `now()` é o início da transação e ficaria anterior a uma espera longa por lock; a janela do Pix e o extrato usam o instante em que a regra foi de fato avaliada. | Uma leitura extra do relógio por escrita. |
+| Estado atual, eventos e versão na conta | O estado responde às consultas, os eventos explicam cada mudança e a versão separa um comando antigo de uma decisão nova. | O integrador precisa enviar a versão que leu. |
+| Quota Pix somada dos lançamentos confirmados | Sem contador separado não existe um segundo número para reconciliar com o histórico. | Uma soma por Pix, feita sob o lock do cliente. |
+
 ## Implementação
 
 ### Rotas
