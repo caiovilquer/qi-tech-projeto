@@ -101,7 +101,8 @@ class AccountController(BaseController):
                 return result
         elif row['status_version']==expected+1:
             event=self.repository.last_event(row['id'])
-            if event['new_status']!=desired or event['reason']!=reason:
+            # Only an administrative transition can be resent; the bureau decision was never a command.
+            if event['actor']!=INTEGRATOR_ID or event['new_status']!=desired or event['reason']!=reason:
                 raise BankingError('QIT001034')
         else:
             raise BankingError('QIT001034')
