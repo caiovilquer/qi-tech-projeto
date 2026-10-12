@@ -32,7 +32,8 @@ body { margin: 0; font: 9pt/1.38 "Segoe UI", "Helvetica Neue", Arial, sans-serif
 h1 { font-size: 15pt; line-height: 1.2; margin: 0 0 5pt; color: #163d2e; }
 h2 { font-size: 12pt; margin: 9pt 0 3pt; padding-bottom: 2pt; border-bottom: 1px solid #c9d8cf; color: #163d2e; }
 h3 { font-size: 10.2pt; margin: 7pt 0 2pt; color: #1f4f3c; }
-h2, h3, p > strong:only-child { break-after: avoid; }
+h2, h3 { break-after: avoid; }
+.keep { break-inside: avoid; }
 p, li { margin: 0 0 3pt; }
 ol, ul { margin: 0 0 4pt 15pt; padding: 0; }
 table { border-collapse: collapse; width: 100%; margin: 3pt 0 6pt; font-size: 7.8pt; line-height: 1.3; }
@@ -45,6 +46,9 @@ table.routes th:nth-child(1) { width: 6%; } table.routes th:nth-child(2) { width
 table.routes th:nth-child(3) { width: 23%; } table.routes th:nth-child(4) { width: 18%; }
 code { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 0.9em; background: #f1f5f2; padding: 0 1.5pt; border-radius: 2px; }
 td code { overflow-wrap: normal; word-break: keep-all; }
+pre { margin: 3pt 0 6pt; padding: 5pt 7pt; background: #f1f5f2; border: 1px solid #c9d8cf; border-radius: 3px;
+  white-space: pre-wrap; break-inside: avoid; font-size: 7.8pt; line-height: 1.35; }
+pre code { background: none; padding: 0; font-size: 1em; }
 blockquote { margin: 6pt 0 0; padding: 4pt 9pt; background: #eef5f0; border-left: 4px solid #2f6b50; break-inside: avoid; }
 blockquote ul { margin-left: 12pt; }
 img { display: block; width: 72%; margin: 3pt auto 5pt; }
@@ -69,14 +73,33 @@ if (next && next.tagName === 'TABLE') next.classList.add('routes');
 for (const code of doc.querySelectorAll('td code')) {
   if (code.textContent.startsWith('/')) code.innerHTML = code.textContent.split('/').map(escape).join('/<wbr>');
 }
-for (const block of doc.querySelectorAll('pre > code.language-mermaid')) {
-  const div = document.createElement('div');
-  div.className = 'mermaid';
-  div.textContent = block.textContent;
-  block.parentElement.replaceWith(div);
-}
-mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
-mermaid.run({ querySelector: '.mermaid' }).then(() => document.body.dataset.ready = 'yes');
+mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral',
+  sequence: { mirrorActors: false, messageMargin: 26, height: 40, boxMargin: 6, noteMargin: 6 } });
+(async () => {
+  let index = 0;
+  for (const block of [...doc.querySelectorAll('pre > code.language-mermaid')]) {
+    const div = document.createElement('div');
+    div.className = 'mermaid';
+    try {
+      div.innerHTML = (await mermaid.render('diagram' + index++, block.textContent)).svg;
+    } catch (error) {
+      div.textContent = 'MERMAID ERROR: ' + (error.message || error);
+    }
+    block.parentElement.replaceWith(div);
+  }
+  // A flow title (a paragraph that is only bold text) stays with what follows it.
+  for (const title of [...doc.querySelectorAll('p')]) {
+    const next = title.nextElementSibling;
+    if (next && title.children.length === 1 && title.firstElementChild.tagName === 'STRONG'
+        && title.textContent.trim() === title.firstElementChild.textContent.trim()) {
+      const keep = document.createElement('div');
+      keep.className = 'keep';
+      title.before(keep);
+      keep.append(title, next);
+    }
+  }
+  document.body.dataset.ready = 'yes';
+})();
 """
 
 
