@@ -31,6 +31,13 @@ def test_invalid_documents(doc,code,status):
     error(call('POST','/customers',body={'customer_type':'PF','name':'Example','document_number':doc},key=uid()),code,status)
 
 
+def test_check_digit_mismatch_is_invalid_document():
+    valid=document()
+    for position in (9,10):
+        wrong=valid[:position]+str((int(valid[position])+1)%10)+valid[position+1:]
+        error(call('POST','/customers',body={'customer_type':'PF','name':'Example','document_number':wrong},key=uid()),'QIT001003',422)
+
+
 def test_authorization_and_schema():
     c,body=customer()
     error(call('GET','/customers/'+c),'QIT000005',403)

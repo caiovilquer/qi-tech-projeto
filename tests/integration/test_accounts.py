@@ -84,8 +84,9 @@ def test_invalid_bureau_reference_keeps_pending_and_allows_resume(invalid):
 
 def test_account_access_and_listing():
     c,_=customer(); other,_=customer(); a=account(c); b=account(c)
-    error(call('GET','/accounts/'+a,other),'QIT001009',404)
-    error(call('GET','/accounts/'+uid(),other),'QIT001009',404)
+    alien=call('GET','/accounts/'+a,other); missing=call('GET','/accounts/'+uid(),other)
+    error(alien,'QIT001009',404); error(missing,'QIT001009',404)
+    assert alien.json()==missing.json()  # foreign and missing accounts are indistinguishable
     error(call('POST','/accounts',other,{'customer_key':c},uid()),'QIT001008',404)
     assert ok(call('GET','/accounts',c,params={'limit':1,'page':0}))['data'][0]['account_key']==a
     assert ok(call('GET','/accounts',c,params={'limit':1,'page':1}))['data'][0]['account_key']==b
